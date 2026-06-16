@@ -1,0 +1,37 @@
+{
+  "_comment": "Source of truth for agent work scope. One feature 'in-progress' at a time. A feature is 'done' only with recorded evidence (command + result). Replace the placeholder feat-100+ entries with your real work items; keep feat-000 as the baseline gate.",
+  "features": [
+    {
+      "id": "feat-000",
+      "name": "Baseline green",
+      "description": "From a clean checkout, ./init.sh passes end to end (pnpm install, prettier check, eslint, tsc --noEmit, i18n key parity, vitest). This is the precondition for all other work.",
+      "dependencies": [],
+      "status": "done",
+      "evidence": "2026-06-16 ./init.sh passed clean: pnpm install + postinstall OK; prettier --check OK; eslint 0 errors (19 warnings); tsc --noEmit clean; i18n key parity OK (8 locales); vitest 815 passed / 109 files."
+    },
+    {
+      "id": "feat-100",
+      "name": "[PLACEHOLDER] First work item",
+      "description": "Replace with one concrete behavior/bug/change. Reference the issue (Closes #NNN) per CONTRIBUTING. Keep scope to a single concern.",
+      "dependencies": ["feat-000"],
+      "status": "not-started",
+      "evidence": ""
+    },
+    {
+      "id": "feat-101",
+      "name": "[PLACEHOLDER] Verification coverage for feat-100",
+      "description": "Add/confirm unit tests (tests/**/*.test.ts) or an eval (tests/**/*.eval.test.ts) covering the change. If it touches UI text, add locale keys and pass pnpm check:i18n-keys.",
+      "dependencies": ["feat-100"],
+      "status": "not-started",
+      "evidence": ""
+    },
+    {
+      "id": "feat-102",
+      "name": "[PLACEHOLDER] Docs + handoff for feat-100",
+      "description": "Update README/CLAUDE.md/CHANGELOG if behavior changed; record evidence in progress.md; leave repo restartable from ./init.sh.",
+      "dependencies": ["feat-101"],
+      "status": "not-started",
+      "evidence": ""
+    }
+  ]
+}

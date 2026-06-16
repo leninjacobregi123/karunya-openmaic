@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//home/ewards/.agents/skills/harness-creator/**)",
+      "Bash(ls scripts/templates)",
+      "Bash(cat scripts/templates/agents.md)",
+      "Bash(cat scripts/templates/feature-list.json)",
+      "Bash(cat scripts/templates/progress.md)"
+    ]
+  }
+}
