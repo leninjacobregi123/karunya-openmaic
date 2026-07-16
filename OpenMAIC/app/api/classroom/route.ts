@@ -8,6 +8,8 @@ import {
   readClassroom,
 } from '@/lib/server/classroom-storage';
 import { createLogger } from '@/lib/logger';
+import { getCurrentUser } from '@/lib/auth/current-user';
+import { canAccessClassroom, getPublishedManifest } from '@/lib/courses/service';
 
 const log = createLogger('Classroom API');
 
@@ -64,7 +66,19 @@ export async function GET(request: NextRequest) {
       return apiError(API_ERROR_CODES.INVALID_REQUEST, 400, 'Invalid classroom id');
     }
 
-    const classroom = await readClassroom(id);
+    // Enrollment-based access: students may only load courses assigned to them;
+    // teachers/admins may load any (authoring).
+    const user = await getCurrentUser();
+    if (!user) {
+      return apiError(API_ERROR_CODES.INVALID_REQUEST, 401, 'Login required');
+    }
+    if (!(await canAccessClassroom(user, id))) {
+      return apiError(API_ERROR_CODES.INVALID_REQUEST, 403, 'You are not enrolled in this course');
+    }
+
+    // Prefer the published manifest from Postgres (stateless across replicas);
+    // fall back to pod-local disk for unpublished / teacher-preview classrooms.
+    const classroom = (await getPublishedManifest(id)) ?? (await readClassroom(id));
     if (!classroom) {
       return apiError(API_ERROR_CODES.INVALID_REQUEST, 404, 'Classroom not found');
     }

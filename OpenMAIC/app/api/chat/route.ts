@@ -20,7 +20,25 @@ import { apiError } from '@/lib/server/api-response';
 import { createLogger } from '@/lib/logger';
 import { resolveModel } from '@/lib/server/resolve-model';
 import type { ThinkingConfig } from '@/lib/types/provider';
+import { getCurrentUser } from '@/lib/auth/current-user';
+import { recordChatMessage } from '@/lib/courses/progress-service';
 const log = createLogger('Chat API');
+
+/** Extract plain text from the last user message (UIMessage parts or content). */
+function lastUserText(messages: StatelessChatRequest['messages']): string {
+  const m = [...messages].reverse().find((x) => x.role === 'user') as
+    | { parts?: Array<{ type?: string; text?: string }>; content?: string }
+    | undefined;
+  if (!m) return '';
+  if (Array.isArray(m.parts)) {
+    return m.parts
+      .filter((p) => p?.type === 'text' && p.text)
+      .map((p) => p.text)
+      .join(' ')
+      .trim();
+  }
+  return typeof m.content === 'string' ? m.content.trim() : '';
+}
 
 // Allow streaming responses up to 60 seconds
 export const maxDuration = 60;
@@ -87,6 +105,23 @@ export async function POST(req: NextRequest) {
     // Use the native request signal for abort propagation
     const signal = req.signal;
 
+    // Phase 3 transcript capture (no-op for non-students / non-enrolled, server-side).
+    // stage.id equals the published course's sourceClassroomId.
+    const sessionUser = await getCurrentUser();
+    const chatClassroomId = body.storeState?.stage?.id;
+    const chatSceneId = body.storeState?.currentSceneId ?? undefined;
+    if (sessionUser && chatClassroomId) {
+      const userText = lastUserText(body.messages);
+      if (userText) {
+        recordChatMessage(sessionUser, {
+          classroomId: chatClassroomId,
+          sceneId: chatSceneId,
+          role: 'student',
+          content: userText,
+        }).catch(() => {});
+      }
+    }
+
     // Create SSE stream
     const { readable, writable } = new TransformStream();
     const writer = writable.getWriter();
@@ -132,17 +167,32 @@ export async function POST(req: NextRequest) {
           thinkingConfig,
         );
 
+        let assistantText = '';
         for await (const event of generator) {
           if (signal.aborted) {
             log.info('Request was aborted');
             break;
           }
 
+          const ev = event as { type?: string; data?: { content?: string } };
+          if (ev.type === 'text_delta' && ev.data?.content) assistantText += ev.data.content;
+
           const data = `data: ${JSON.stringify(event)}\n\n`;
           await writer.write(encoder.encode(data));
         }
 
         stopHeartbeat();
+
+        // Persist the AI teacher's reply to the transcript (no-op for non-students).
+        if (sessionUser && chatClassroomId && assistantText.trim()) {
+          recordChatMessage(sessionUser, {
+            classroomId: chatClassroomId,
+            sceneId: chatSceneId,
+            role: 'teacher_agent',
+            content: assistantText.trim(),
+          }).catch(() => {});
+        }
+
         await writer.close();
       } catch (error) {
         stopHeartbeat();

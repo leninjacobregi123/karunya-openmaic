@@ -33,6 +33,10 @@ import { Textarea as UITextarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import { SettingsDialog } from '@/components/settings';
 import { GenerationToolbar } from '@/components/generation/generation-toolbar';
+import Link from 'next/link';
+import { useSession } from '@/lib/auth/session-context';
+import { StudentHome } from '@/components/student-home';
+import { UserMenu } from '@/components/auth/user-menu';
 import { AgentBar } from '@/components/agent/agent-bar';
 import { useTheme } from '@/lib/hooks/use-theme';
 import { nanoid } from 'nanoid';
@@ -368,6 +372,21 @@ function HomePage() {
     }
   };
 
+  // Role gate: students get a read-only landing (no course creation). The server
+  // already enforces this (middleware 403s authoring APIs); this hides the UI.
+  const session = useSession();
+  if (session.loading) {
+    return (
+      <div className="flex min-h-[100dvh] items-center justify-center text-sm text-muted-foreground">
+        Loading…
+      </div>
+    );
+  }
+  const isTeacherRole = session.user?.role === 'teacher' || session.user?.role === 'admin';
+  if (!isTeacherRole) {
+    return <StudentHome user={session.user} />;
+  }
+
   return (
     <div className="min-h-[100dvh] w-full bg-gradient-to-b from-slate-50 to-slate-100 dark:from-slate-950 dark:to-slate-900 flex flex-col items-center p-4 pt-16 md:p-8 md:pt-16 overflow-x-hidden">
       <input
@@ -467,6 +486,15 @@ function HomePage() {
             <Settings className="w-4 h-4 group-hover:rotate-90 transition-transform duration-500" />
           </button>
         </div>
+
+        <div className="w-[1px] h-4 bg-gray-200 dark:bg-gray-700" />
+        <Link
+          href="/teacher"
+          className="px-2 py-1 rounded-full text-xs text-gray-500 dark:text-gray-400 hover:bg-white dark:hover:bg-gray-700 hover:text-gray-800 dark:hover:text-gray-200 transition-all"
+        >
+          Dashboard
+        </Link>
+        <UserMenu />
       </div>
       <SettingsDialog
         open={settingsOpen}

@@ -1,0 +1,19 @@
+# Development image for OpenMAIC (hot-reload Next.js dev server).
+# Debian/glibc base on arm64 (GB10) so sharp / @napi-rs/canvas use prebuilt binaries.
+# Source is bind-mounted at runtime; deps install into a named volume (see docker-compose.dev.yml).
+FROM node:22-bookworm-slim
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates git \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN corepack enable && corepack prepare pnpm@10.28.0 --activate
+
+WORKDIR /app
+
+ENV NEXT_TELEMETRY_DISABLED=1
+
+EXPOSE 3000
+
+# Actual run command is provided by docker-compose.dev.yml (install-if-needed, then next dev).
+CMD ["bash", "-lc", "echo 'Run via docker-compose.dev.yml'; sleep infinity"]

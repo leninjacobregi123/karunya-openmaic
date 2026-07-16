@@ -9,6 +9,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { createLogger } from '@/lib/logger';
 import { CLASSROOMS_DIR } from '@/lib/server/classroom-storage';
+import { putMedia, mediaKey } from '@/lib/server/s3';
 import { generateImage } from '@/lib/media/image-providers';
 import { generateVideo, normalizeVideoOptions } from '@/lib/media/video-providers';
 import { generateTTS } from '@/lib/audio/tts-providers';
@@ -123,6 +124,9 @@ export async function generateMediaForClassroom(
 
         const filename = `${req.elementId}.${ext}`;
         await fs.writeFile(path.join(mediaDir, filename), buf);
+        await putMedia(mediaKey(classroomId, `media/${filename}`), buf).catch((e) =>
+          log.warn('MinIO media upload failed', e),
+        );
         mediaMap[req.elementId] = mediaServingUrl(baseUrl, classroomId, `media/${filename}`);
         log.info(`Generated image: ${filename}`);
       } catch (err) {
@@ -156,6 +160,9 @@ export async function generateMediaForClassroom(
         const buf = await downloadToBuffer(result.url);
         const filename = `${req.elementId}.mp4`;
         await fs.writeFile(path.join(mediaDir, filename), buf);
+        await putMedia(mediaKey(classroomId, `media/${filename}`), buf).catch((e) =>
+          log.warn('MinIO media upload failed', e),
+        );
         mediaMap[req.elementId] = mediaServingUrl(baseUrl, classroomId, `media/${filename}`);
         log.info(`Generated video: ${filename}`);
       } catch (err) {
@@ -277,6 +284,9 @@ export async function generateTTSForClassroom(
 
         const filename = `${audioId}.${result.format || format}`;
         await fs.writeFile(path.join(audioDir, filename), result.audio);
+        await putMedia(mediaKey(classroomId, `audio/${filename}`), Buffer.from(result.audio)).catch(
+          (e) => log.warn('MinIO audio upload failed', e),
+        );
 
         speechAction.audioId = audioId;
         speechAction.audioUrl = mediaServingUrl(baseUrl, classroomId, `audio/${filename}`);

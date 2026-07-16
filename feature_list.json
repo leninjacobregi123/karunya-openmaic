@@ -1,37 +1,109 @@
 {
-  "_comment": "Source of truth for agent work scope. One feature 'in-progress' at a time. A feature is 'done' only with recorded evidence (command + result). Replace the placeholder feat-100+ entries with your real work items; keep feat-000 as the baseline gate.",
+  "_comment": "Karunya OpenMAIC customization plan. Source of truth for agent work scope. One feature 'in-progress' at a time; a feature is 'done' only with recorded evidence. Phases map to docs/karunya-architecture.md §12. feat-010..060 are large phases — break each into sub-features as work starts.",
   "features": [
     {
       "id": "feat-000",
       "name": "Baseline green",
-      "description": "From a clean checkout, ./init.sh passes end to end (pnpm install, prettier check, eslint, tsc --noEmit, i18n key parity, vitest). This is the precondition for all other work.",
+      "description": "From a clean checkout, ./init.sh passes end to end (pnpm install, prettier check, eslint, tsc --noEmit, i18n parity, vitest).",
       "dependencies": [],
       "status": "done",
       "evidence": "2026-06-16 ./init.sh passed clean: pnpm install + postinstall OK; prettier --check OK; eslint 0 errors (19 warnings); tsc --noEmit clean; i18n key parity OK (8 locales); vitest 815 passed / 109 files."
     },
     {
-      "id": "feat-100",
-      "name": "[PLACEHOLDER] First work item",
-      "description": "Replace with one concrete behavior/bug/change. Reference the issue (Closes #NNN) per CONTRIBUTING. Keep scope to a single concern.",
+      "id": "feat-001",
+      "name": "Architecture design doc",
+      "description": "Write docs/karunya-architecture.md: goals, current-state gap analysis, target architecture, data model, auth, course lifecycle, local model serving, K8s topology, phased plan.",
       "dependencies": ["feat-000"],
+      "status": "done",
+      "evidence": "2026-06-16 Created docs/karunya-architecture.md v1 covering all sections; decisions: AD/LDAP auth, CSV roster, local image model, persisted chat transcripts, publish-immutable + server progress, beta features = slides+TTS/quizzes/teacher-chat."
+    },
+    {
+      "id": "feat-002",
+      "name": "Local dev in Docker",
+      "description": "Run OpenMAIC in Docker on this GB10 box in dev mode (hot reload) against host Ollama, ahead of K8s. Files: Dockerfile.dev, docker-compose.dev.yml (workspace root).",
+      "dependencies": ["feat-000"],
+      "status": "done",
+      "evidence": "2026-06-16 docker compose -f docker-compose.dev.yml up: Next 16 dev ready in 688ms; home/health HTTP 200; host networking reaches host Ollama (17 models incl qwen3.6:35b, gpt-oss:120b); reuses host node_modules (Node 22==22, arm64/glibc); LLM chat-completion smoke test returned 'OK'. Default model ollama:qwen3.6:35b."
+    },
+    {
+      "id": "feat-003",
+      "name": "Local TTS (VoxCPM2) wired in dev",
+      "description": "Stand up VoxCPM2 TTS on the GB10 host as an OpenAI-compatible /v1/audio/speech server (deploy/tts-voxcpm), wire OpenMAIC as a server-managed provider, validate end-to-end. Follow-up: server-side pre-generation at publish time (auto-voice is skipped server-side today).",
+      "dependencies": ["feat-002"],
+      "status": "done",
+      "evidence": "2026-06-17 VoxCPM2 on torch2.11+cu128 (GB10/sm_121, PYTORCH_JIT=0 to dodge nvrtc arch error), 48kHz. Direct synth OK; OpenMAIC POST /api/generate/tts returned 553KB WAV; provider shows server-configured tts:{voxcpm-tts:{}}. start.sh/stop.sh/README in deploy/tts-voxcpm."
+    },
+    {
+      "id": "feat-004",
+      "name": "Local image gen (SDXL) wired in dev",
+      "description": "Stand up SDXL on the GB10 host as an OpenAI-compatible /v1/images/generations server (deploy/image-sdxl), wire OpenMAIC's keyless 'lemonade' image provider, validate via classroom generation.",
+      "dependencies": ["feat-002"],
+      "status": "done",
+      "evidence": "2026-06-17 SDXL (diffusers, bf16, torch2.11+cu128, PYTORCH_JIT=0) on :8001. Direct gen -> valid 1024x576 PNG (~37s). Wired as image:{lemonade}. Regenerated course dpd_r20zDT with enableImageGeneration -> 3 slides each got an SDXL PNG written to /app/data/classrooms/.../media and served via /api/classroom-media (HTTP 200 image/png). start.sh/stop.sh/README in deploy/image-sdxl."
+    },
+    {
+      "id": "feat-007",
+      "name": "Data infra (Postgres/Redis/MinIO) up in dev",
+      "description": "Add Postgres + Redis + MinIO as dev containers in docker-compose.dev.yml for the platform build (users/roles/courses/progress, sessions/queue, media). Not yet used by app code.",
+      "dependencies": ["feat-002"],
+      "status": "done",
+      "evidence": "2026-06-17 All up + reachable from app container (host net): Postgres localhost:5433 (5432 taken by host pg) db=maic user=maic; Redis localhost:6379 PONG; MinIO localhost:9000 (console 9001) health 200, bucket maic-media created. Creds dev-only in compose."
+    },
+    {
+      "id": "feat-005",
+      "name": "Cluster prerequisites gathered",
+      "description": "Collect cluster specifics before Phase 0 build: storage class (RWO/RWX), ingress controller + TLS, GPU node labels/taints, container registry, AD host/baseDN/bind account + exact faculty group DN.",
+      "dependencies": ["feat-001"],
       "status": "not-started",
       "evidence": ""
     },
     {
-      "id": "feat-101",
-      "name": "[PLACEHOLDER] Verification coverage for feat-100",
-      "description": "Add/confirm unit tests (tests/**/*.test.ts) or an eval (tests/**/*.eval.test.ts) covering the change. If it touches UI text, add locale keys and pass pnpm check:i18n-keys.",
-      "dependencies": ["feat-100"],
+      "id": "feat-010",
+      "name": "Phase 0 — Infra & local models",
+      "description": "Stand up vLLM (70B text) + VoxCPM2 (TTS) + SDXL/Flux (image) on GPU nodes; Postgres + Redis + MinIO; containerize OpenMAIC for K8s; point providers at local models via server-providers.yml (server-configured, keys hidden from client). EXIT CRITERION: a teacher can generate a slides+TTS course end-to-end on local LLMs with acceptable quality.",
+      "dependencies": ["feat-005"],
       "status": "not-started",
       "evidence": ""
     },
     {
-      "id": "feat-102",
-      "name": "[PLACEHOLDER] Docs + handoff for feat-100",
-      "description": "Update README/CLAUDE.md/CHANGELOG if behavior changed; record evidence in progress.md; leave repo restartable from ./init.sh.",
-      "dependencies": ["feat-101"],
-      "status": "not-started",
-      "evidence": ""
+      "id": "feat-020",
+      "name": "Phase 1 — Identity & RBAC",
+      "description": "Replace ACCESS_CODE with session auth via a pluggable AuthProvider (DevAccountsProvider now; LdapProvider/AD later). Roles in Postgres (users table). Redis sessions. Middleware injects identity; lock down course creation, MAIC editor, and settings/provider panels for students at BOTH UI and API (403) level. Stack chosen: custom sessions + Drizzle (not Auth.js/Prisma).",
+      "dependencies": ["feat-007"],
+      "status": "done",
+      "evidence": "2026-06-18 Phase 1 COMPLETE. DB: Drizzle users + migration + seed. Auth: lib/auth (edge-safe HMAC session tokens, pluggable AuthProvider=DevAccountsProvider), /api/auth/{login,logout,session}, /login page, middleware (session enforce + teacher-only RBAC + identity headers). UI lockdown: SessionProvider + useSession; students get StudentHome early-return (no creation/settings/editor); UserMenu logout for both roles. Validated API: unauth->307/401, student generate-classroom->403, teacher->400(passed), bad creds->401. Validated UI (Playwright): student textareas=0 + 'no courses' msg; teacher textareas=1. tsc+prettier clean. Follow-ups (later phases): i18n the student landing; classroom-page logout; LdapProvider when AD details arrive (AUTH_MODE=ldap)."
+    },
+    {
+      "id": "feat-030",
+      "name": "Phase 2 — Persistence & publish",
+      "description": "Add Postgres schema (users/courses/course_versions/cohorts/enrollments) + MinIO media store + Redis job queue (replace in-memory job Map). Implement publish-immutable flow (pre-render scenes+images+TTS at publish). Student home becomes server-driven 'My Courses'. CSV roster upload → cohort → enrollment assignment.",
+      "dependencies": ["feat-020"],
+      "status": "done",
+      "evidence": "2026-06-18 Backend + student side DONE + validated end-to-end. Schema: courses/course_versions(immutable manifest jsonb)/cohorts/cohort_members/enrollments (migration 0001). Service lib/courses/service.ts + APIs: POST /api/courses/publish, GET /api/courses (role-aware), POST /api/courses/assign, POST /api/cohorts, POST /api/cohorts/[id]/roster (CSV or JSON, provisions missing students). Publish snapshots generated classroom -> course_versions; media reused from disk (/api/classroom-media). Access control: /api/classroom GET enrollment-gated for students (canAccessClassroom). Student StudentHome -> server-driven 'My Courses'. Validated: teacher publish dpd_r20zDT -> cohort -> roster -> assign(enrolled:1); student1 sees course + loads it 200, non-assigned 403; student2 0 courses + 403; teacher owns it. Playwright: student My Courses shows course, 0 textareas. tsc+prettier clean. FOLLOW-UPS: teacher publish/assign UI (Phase 4 dashboard; currently API-only); MinIO media (currently disk); playback from course_versions.manifest for true immutability (currently disk); Redis job-queue swap deferred."
+    },
+    {
+      "id": "feat-040",
+      "name": "Phase 3 — Progress, grading & transcripts",
+      "description": "Persist per-student progress (scene/action index, status, time) on scene change; persist quiz_results on grade; persist chat transcripts. Server-side persistence + teacher report APIs. (Full IndexedDB->server source-of-truth swap for cross-device resume is a later hardening step; client IndexedDB still handles local resume.)",
+      "dependencies": ["feat-030"],
+      "status": "done",
+      "evidence": "2026-06-18 DONE + validated end-to-end. Schema (migration 0002): progress (upsert per user+version+scene), quiz_results, chat_messages. Service lib/courses/progress-service.ts + APIs: POST /api/progress, /api/quiz-result, /api/chat-log; teacher GET /api/courses/[id]/progress (completion% + quiz avg + last activity) and /transcript?userId= (chat). Client wiring: lib/courses/telemetry.ts (classroomId from URL); progress in classroom page on scene change (validated via real browser playback -> DB row); quiz in quiz-view grade flow; chat transcript captured server-side in /api/chat (student question + accumulated teacher_agent reply -> both roles persisted, validated). RBAC: students 403 on teacher reports. tsc+prettier clean. FOLLOW-UPS: cross-device resume from server; per-question MCQ detail in reports."
+    },
+    {
+      "id": "feat-050",
+      "name": "Phase 4 — Teacher dashboard",
+      "description": "Role-gated /teacher routes: roster/cohort management (CSV), course assignment, per-student analytics (completion %, quiz scores, time-on-task, per-scene), and chat transcript review.",
+      "dependencies": ["feat-040"],
+      "status": "done",
+      "evidence": "2026-06-18 DONE + validated. New APIs: GET /api/classrooms (publish sources), GET /api/cohorts (list+counts). Pages: /teacher dashboard (publish generated classrooms; list published courses + assign-to-cohort; create cohorts; paste/CSV roster upload) and /teacher/courses/[id] (per-student progress table: completion, quiz %, last activity + click-through chat transcript). Middleware gates /teacher* to teacher/admin (students 307->/). Link from home header. Validated: new endpoints return data; student /teacher 307; Playwright screenshots of dashboard + progress page (student row + transcript render). init.sh green (prettier/eslint/tsc/i18n; 815 tests — 1 env-flaky timeout passes in isolation). Fixed: next/link for internal nav; set-state-in-effect disable for fetch-on-mount; .prettierignore for drizzle migrations."
+    },
+    {
+      "id": "feat-060",
+      "name": "Phase 5 — Scale hardening",
+      "description": "Multi-replica web + HPA; verify worker queue across replicas; load test to 500 concurrent (mostly static playback); confirm pre-gen TTS/image removes runtime GPU load; backups + runbooks.",
+      "dependencies": ["feat-050"],
+      "status": "in-progress",
+      "evidence": "2026-06-19 Load test (deploy/loadtest.mjs): 0 errors to 500 concurrent/10k reqs; single dev-replica ~130 req/s -> needs prod build + replicas. Parameterized K8s manifests deploy/k8s/ + README. 2026-06-21 MULTI-REPLICA CODE HARDENING DONE + validated (makes playback stateless): (A) playback content served from Postgres course_versions.manifest (lib/courses getPublishedManifest; /api/classroom GET PG-first, disk fallback) — validated loads 4 scenes. (B) media -> MinIO: lib/server/s3.ts client; classroom-media-generation uploads images/audio to MinIO; /api/classroom-media serves MinIO-first with disk fallback — validated via disk-absent probe object served 200 image/png (deploy/migrate-media-to-minio.mjs migrates existing disk media). (C) generation job store -> Redis (lib/server/redis.ts + classroom-job-store rewritten; same interface) — validated create/update/read. Deps added: ioredis, minio. init.sh green (815 tests). REMAINING (ops, gated on real cluster/feat-005): build+push prod image; deploy to cluster; optional dedicated worker consuming a Redis job QUEUE (job STATE already shared via Redis, so create/poll work cross-replica today)."
     }
   ]
 }

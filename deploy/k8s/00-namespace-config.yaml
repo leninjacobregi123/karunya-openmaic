@@ -1,0 +1,45 @@
+# Namespace + config/secrets for OpenMAIC (Karunya). Fill REPLACE_ME values.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: openmaic
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openmaic-config
+  namespace: openmaic
+data:
+  NODE_ENV: 'production'
+  AUTH_MODE: 'ldap' # 'dev' for local accounts; 'ldap' once AD is wired
+  ALLOW_LOCAL_NETWORKS: 'true' # in-cluster model endpoints
+  DEFAULT_MODEL: 'vllm:Qwen2.5-72B-Instruct'
+  OPENAI_BASE_URL: 'http://vllm:8000/v1' # vLLM served as OpenAI-compatible
+  OPENAI_MODELS: 'Qwen2.5-72B-Instruct'
+  TTS_VOXCPM_BASE_URL: 'http://voxcpm:8000/v1'
+  IMAGE_LEMONADE_BASE_URL: 'http://sdxl:8001/v1'
+  S3_ENDPOINT: 'http://minio:9000'
+  S3_BUCKET: 'maic-media'
+  PARALLEL_SCENE_CONCURRENCY: '4'
+  # AD/LDAP (consumed by the LdapProvider once implemented)
+  AD_URL: 'ldaps://REPLACE_ME:636'
+  AD_BASE_DN: 'REPLACE_ME'
+  AD_TEACHER_GROUP_DN: 'REPLACE_ME'
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: openmaic-secrets
+  namespace: openmaic
+type: Opaque
+stringData:
+  SESSION_SECRET: 'REPLACE_ME-long-random'
+  DATABASE_URL: 'postgresql://maic:REPLACE_ME@postgres:5432/maic'
+  REDIS_URL: 'redis://redis:6379'
+  S3_ACCESS_KEY: 'maic'
+  S3_SECRET_KEY: 'REPLACE_ME'
+  POSTGRES_PASSWORD: 'REPLACE_ME'
+  MINIO_ROOT_PASSWORD: 'REPLACE_ME'
+  AD_BIND_DN: 'REPLACE_ME'
+  AD_BIND_PASSWORD: 'REPLACE_ME'
+  # OPENAI_API_KEY left empty: local vLLM is keyless

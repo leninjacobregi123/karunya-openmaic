@@ -1,75 +1,69 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { SESSION_COOKIE, verifySessionToken } from '@/lib/auth/session';
 
-/** Convert string to Uint8Array */
-function encode(str: string): Uint8Array {
-  return new TextEncoder().encode(str);
+// Reachable without a session.
+const PUBLIC_PREFIXES = ['/login', '/api/auth/', '/api/health'];
+function isPublic(pathname: string): boolean {
+  return PUBLIC_PREFIXES.some((p) => pathname === p || pathname.startsWith(p));
 }
 
-/** Convert ArrayBuffer to hex string */
-function bufToHex(buf: ArrayBuffer): string {
-  return Array.from(new Uint8Array(buf))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
+/**
+ * Course-authoring / creation surface — teacher & admin only. Students keep the
+ * playback-time endpoints (chat, tts, quiz-grade, classroom GET, classroom-media).
+ */
+function isTeacherOnly(req: NextRequest): boolean {
+  const p = req.nextUrl.pathname;
+  const m = req.method;
+  if (p === '/api/generate-classroom') return true;
+  if (p.startsWith('/api/generate/scene')) return true;
+  if (p === '/api/generate/image' || p === '/api/generate/video') return true;
+  if (p === '/api/classroom' && m !== 'GET') return true;
+  if (p === '/api/courses/publish' || p === '/api/courses/assign') return true;
+  if (p.startsWith('/api/courses/') && (p.endsWith('/progress') || p.endsWith('/transcript')))
+    return true;
+  if (p.startsWith('/api/cohorts')) return true;
+  if (p === '/api/classrooms') return true; // publish-source list (teacher)
+  if (p === '/generation-preview') return true;
+  if (p === '/teacher' || p.startsWith('/teacher/')) return true;
+  return false;
 }
 
-/** Verify an HMAC-signed token using Web Crypto API (Edge-compatible) */
-async function verifyToken(token: string, accessCode: string): Promise<boolean> {
-  const dotIndex = token.indexOf('.');
-  if (dotIndex === -1) return false;
-
-  const timestamp = token.substring(0, dotIndex);
-  const signature = token.substring(dotIndex + 1);
-
-  const keyData = encode(accessCode);
-  const key = await crypto.subtle.importKey(
-    'raw',
-    keyData.buffer as ArrayBuffer,
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  );
-
-  const data = encode(timestamp);
-  const expected = bufToHex(await crypto.subtle.sign('HMAC', key, data.buffer as ArrayBuffer));
-
-  // Constant-length comparison (not truly constant-time in JS, but sufficient here)
-  if (signature.length !== expected.length) return false;
-  let mismatch = 0;
-  for (let i = 0; i < signature.length; i++) {
-    mismatch |= signature.charCodeAt(i) ^ expected.charCodeAt(i);
+function unauthorized(req: NextRequest, status: 401 | 403, code: string, msg: string) {
+  if (req.nextUrl.pathname.startsWith('/api/')) {
+    return NextResponse.json({ success: false, errorCode: code, error: msg }, { status });
   }
-  return mismatch === 0;
+  const url = req.nextUrl.clone();
+  if (status === 401) {
+    url.pathname = '/login';
+    url.searchParams.set('next', req.nextUrl.pathname);
+  } else {
+    url.pathname = '/';
+    url.search = '';
+  }
+  return NextResponse.redirect(url);
 }
 
 export async function middleware(request: NextRequest) {
-  const accessCode = process.env.ACCESS_CODE;
-  if (!accessCode) {
-    return NextResponse.next();
-  }
-
   const { pathname } = request.nextUrl;
+  if (isPublic(pathname)) return NextResponse.next();
 
-  // Whitelist: access-code endpoints, health check
-  if (pathname.startsWith('/api/access-code/') || pathname === '/api/health') {
-    return NextResponse.next();
+  const token = request.cookies.get(SESSION_COOKIE)?.value;
+  const session = token ? await verifySessionToken(token) : null;
+
+  if (!session) {
+    return unauthorized(request, 401, 'UNAUTHENTICATED', 'Login required');
   }
 
-  // Check cookie — validate HMAC signature, not just existence
-  const cookie = request.cookies.get('openmaic_access');
-  if (cookie?.value && (await verifyToken(cookie.value, accessCode))) {
-    return NextResponse.next();
+  if (session.user.role === 'student' && isTeacherOnly(request)) {
+    return unauthorized(request, 403, 'FORBIDDEN', 'This action is restricted to teachers');
   }
 
-  // API requests without valid cookie → 401
-  if (pathname.startsWith('/api/')) {
-    return NextResponse.json(
-      { success: false, errorCode: 'INVALID_REQUEST', error: 'Access code required' },
-      { status: 401 },
-    );
-  }
-
-  // Page requests → let through, frontend shows modal
-  return NextResponse.next();
+  // Make identity available to downstream route handlers without re-verifying.
+  const headers = new Headers(request.headers);
+  headers.set('x-user-id', session.user.id);
+  headers.set('x-user-role', session.user.role);
+  headers.set('x-user-email', session.user.email);
+  return NextResponse.next({ request: { headers } });
 }
 
 export const config = {

@@ -1,16 +1,18 @@
-import { promises as fs } from 'fs';
-import path from 'path';
 import type {
   ClassroomGenerationProgress,
   ClassroomGenerationStep,
   GenerateClassroomInput,
   GenerateClassroomResult,
 } from '@/lib/server/classroom-generation';
-import {
-  CLASSROOM_JOBS_DIR,
-  ensureClassroomJobsDir,
-  writeJsonFileAtomic,
-} from '@/lib/server/classroom-storage';
+import { getRedis } from '@/lib/server/redis';
+
+// Redis-backed job store so create/poll/update work across web replicas
+// (replaces the previous pod-local disk JSON). Keys expire after JOB_TTL_SECONDS.
+const JOB_KEY_PREFIX = 'maic:classroom-job:';
+const JOB_TTL_SECONDS = 24 * 60 * 60; // 24h
+function jobKey(jobId: string) {
+  return `${JOB_KEY_PREFIX}${jobId}`;
+}
 
 export type ClassroomGenerationJobStatus = 'queued' | 'running' | 'succeeded' | 'failed';
 
@@ -40,8 +42,8 @@ export interface ClassroomGenerationJob {
   error?: string;
 }
 
-function jobFilePath(jobId: string) {
-  return path.join(CLASSROOM_JOBS_DIR, `${jobId}.json`);
+async function writeJob(job: ClassroomGenerationJob): Promise<void> {
+  await getRedis().set(jobKey(job.id), JSON.stringify(job), 'EX', JOB_TTL_SECONDS);
 }
 
 function buildInputSummary(input: GenerateClassroomInput): ClassroomGenerationJob['inputSummary'] {
@@ -114,24 +116,17 @@ export async function createClassroomGenerationJob(
     scenesGenerated: 0,
   };
 
-  await ensureClassroomJobsDir();
-  await writeJsonFileAtomic(jobFilePath(jobId), job);
+  await writeJob(job);
   return job;
 }
 
 export async function readClassroomGenerationJob(
   jobId: string,
 ): Promise<ClassroomGenerationJob | null> {
-  try {
-    const content = await fs.readFile(jobFilePath(jobId), 'utf-8');
-    const job = JSON.parse(content) as ClassroomGenerationJob;
-    return markStaleIfNeeded(job);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return null;
-    }
-    throw error;
-  }
+  const content = await getRedis().get(jobKey(jobId));
+  if (!content) return null;
+  const job = JSON.parse(content) as ClassroomGenerationJob;
+  return markStaleIfNeeded(job);
 }
 
 export async function updateClassroomGenerationJob(
@@ -150,7 +145,7 @@ export async function updateClassroomGenerationJob(
       updatedAt: new Date().toISOString(),
     };
 
-    await writeJsonFileAtomic(jobFilePath(jobId), updated);
+    await writeJob(updated);
     return updated;
   });
 }
@@ -172,7 +167,7 @@ export async function markClassroomGenerationJobRunning(
       updatedAt: new Date().toISOString(),
     };
 
-    await writeJsonFileAtomic(jobFilePath(jobId), updated);
+    await writeJob(updated);
     return updated;
   });
 }

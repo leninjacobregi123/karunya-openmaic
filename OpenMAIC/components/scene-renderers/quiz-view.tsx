@@ -23,6 +23,7 @@ import type { QuizQuestion } from '@/lib/types/stage';
 import { useDraftCache } from '@/lib/hooks/use-draft-cache';
 import { SpeechButton } from '@/components/audio/speech-button';
 import { gradeChoiceQuestions, isShortAnswer, type QuestionResult } from '@/lib/quiz/grading';
+import { reportQuizResult } from '@/lib/courses/telemetry';
 import {
   clearSubmitted,
   draftKey,
@@ -748,6 +749,20 @@ export function QuizView({ questions, sceneId }: QuizViewProps) {
       setResults(ordered);
       setPhase('reviewing');
       writeSubmittedResults(sceneId, ordered);
+
+      // Persist results server-side for teacher analytics (no-op for non-students).
+      for (const r of ordered) {
+        const q = questions.find((qq) => qq.id === r.questionId);
+        const ans = answers[r.questionId];
+        reportQuizResult({
+          sceneId,
+          questionId: r.questionId,
+          answerText: typeof ans === 'string' ? ans : JSON.stringify(ans ?? ''),
+          score: r.earned,
+          maxScore: q?.points ?? 1,
+          feedback: r.aiComment,
+        });
+      }
     })();
 
     return () => {

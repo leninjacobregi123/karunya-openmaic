@@ -13,6 +13,7 @@ import { createLogger } from '@/lib/logger';
 import { MediaStageProvider } from '@/lib/contexts/media-stage-context';
 import { generateMediaForOutlines } from '@/lib/media/media-orchestrator';
 import { migrateScene } from '@/lib/edit/slide-schema';
+import { reportProgress } from '@/lib/courses/telemetry';
 import type { Scene } from '@/lib/types/stage';
 
 const log = createLogger('Classroom');
@@ -123,6 +124,37 @@ export default function ClassroomDetailPage() {
       setLoading(false);
     }
   }, [classroomId, loadFromStorage]);
+
+  // Phase 3 progress telemetry: report scene transitions (no-op for non-students,
+  // server-side). Marks the scene being left as completed and the new one in_progress.
+  const currentSceneId = useStageStore((s) => s.currentSceneId);
+  const scenes = useStageStore((s) => s.scenes);
+  const prevSceneRef = useRef<{ id: string; ts: number } | null>(null);
+  useEffect(() => {
+    if (loading || error || !currentSceneId) return;
+    const idx = scenes.findIndex((s) => s.id === currentSceneId);
+    const prev = prevSceneRef.current;
+    if (prev && prev.id !== currentSceneId) {
+      reportProgress({ sceneId: prev.id, status: 'completed', timeSpentMs: Date.now() - prev.ts });
+    }
+    reportProgress({
+      sceneId: currentSceneId,
+      sceneIndex: idx >= 0 ? idx : 0,
+      status: 'in_progress',
+    });
+    prevSceneRef.current = { id: currentSceneId, ts: Date.now() };
+  }, [currentSceneId, scenes, loading, error]);
+  useEffect(() => {
+    return () => {
+      const prev = prevSceneRef.current;
+      if (prev)
+        reportProgress({
+          sceneId: prev.id,
+          status: 'completed',
+          timeSpentMs: Date.now() - prev.ts,
+        });
+    };
+  }, []);
 
   useEffect(() => {
     // Reset loading state on course switch to unmount Stage during transition,

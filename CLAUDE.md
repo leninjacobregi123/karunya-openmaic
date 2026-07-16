@@ -64,8 +64,51 @@ Evals are a **separate** vitest config (`vitest.eval.config.ts`, files `tests/**
 - Copy `.env.example` → `.env.local`. At least one LLM provider key is required.
 - Models are referenced everywhere as **`provider:model`** strings (e.g. `google:gemini-3-flash-preview`, `anthropic:claude-opus-4-8`). `DEFAULT_MODEL` sets the server-side default.
 - Providers can be configured by env keys *or* a `server-providers.yml` file. The provider abstraction lives in `lib/ai/` (`providers.ts`, `llm.ts` is the single entry for all LLM calls via `callLLM`/`streamLLM`; thinking/reasoning config in `thinking-config.ts`).
-- `ACCESS_CODE` gates the whole site (UI prompt + all API routes) when set; auth is wired in `middleware.ts`.
+- `ACCESS_CODE` is upstream's single shared-password gate. **In this fork it is superseded** by real session auth (see Karunya customization); leave it unset.
 - `NEXT_PUBLIC_MAIC_EDITOR_ENABLED=true` is a build-time flag that turns on the MAIC Editor (Pro mode).
+
+## Karunya customization (this fork)
+
+This repo is being customized into a **multi-user LMS for Karunya University** (full design: `docs/karunya-architecture.md`). Upstream OpenMAIC is single-user/browser-local; we layered a multi-tenant platform on top. **Status: Phases 0–5 implemented & validated in dev** on a single GB10 box; only real-cluster deploy + AD/LDAP wiring remain. The platform additions live in new modules so upstream merges stay clean.
+
+### Run the full dev stack (this GB10 box)
+
+```bash
+# 1. local model servers on the host GPU
+deploy/tts-voxcpm/start.sh        # VoxCPM2 TTS    :8000
+deploy/image-sdxl/start.sh        # SDXL images    :8001
+#    LLM = host Ollama :11434 (models incl qwen3.6:35b); see deploy/*/README.md
+# 2. app + Postgres/Redis/MinIO (from workspace root)
+docker compose -f docker-compose.dev.yml up -d     # app on http://localhost:3000
+```
+
+- Dev container uses **host networking** and **reuses host `node_modules`** — if deps change, run `./init.sh` then `docker compose -f docker-compose.dev.yml restart openmaic-dev`.
+- DB: `cd OpenMAIC && DATABASE_URL=postgresql://maic:maic_dev_pw@localhost:5433/maic pnpm exec drizzle-kit migrate`; seed dev users: `pnpm tsx lib/db/seed.ts`.
+- Dev logins: `admin@karunya.edu / teacher123` (teacher), `student1@karunya.edu / student123` (student).
+- GB10 (Blackwell sm_121) quirk: the model servers run with `PYTORCH_JIT=0` (cu128 nvrtc rejects sm_121 for JIT-fused kernels) — see `deploy/*/README.md`.
+
+### Platform layer (added on top of upstream)
+
+- **DB (Drizzle/Postgres)** — `lib/db/`: users/roles, courses, `course_versions` (immutable manifests), cohorts, enrollments, progress, quiz_results, chat_messages.
+- **Auth & RBAC** — `lib/auth/`: edge-safe HMAC session tokens, pluggable `AuthProvider` (`DevAccountsProvider` now → `LdapProvider` via `AUTH_MODE=ldap`); `app/api/auth/*`, `app/login/`. `middleware.ts` enforces session + **teacher-only RBAC** + injects identity headers.
+- **Courses / enrollment** — `lib/courses/service.ts` + `app/api/courses/*`, `app/api/cohorts/*`: publish-immutable, cohorts, CSV roster, assign. Student "My Courses" = `components/student-home.tsx`; `/api/classroom` GET is enrollment-gated and serves published content from the Postgres manifest.
+- **Progress / analytics** — `lib/courses/progress-service.ts` + `/api/progress`, `/api/quiz-result`, `/api/chat-log`, teacher `/api/courses/[id]/progress|transcript`; client telemetry `lib/courses/telemetry.ts` (wired into the playback page, quiz grade flow, and `/api/chat`).
+- **Teacher dashboard** — `app/teacher/` (publish, cohort/roster, assign, per-student progress + transcripts).
+- **Stateless-scaling infra** — `lib/server/redis.ts` (job store is Redis-backed), `lib/server/s3.ts` (media uploaded to MinIO on generation, served MinIO-first). These make the web tier safe for `web.replicas > 1`.
+
+### New env (set by `docker-compose.dev.yml`)
+
+`DATABASE_URL`, `REDIS_URL`, `SESSION_SECRET`, `AUTH_MODE` (`dev`|`ldap`), `S3_ENDPOINT`/`S3_ACCESS_KEY`/`S3_SECRET_KEY`/`S3_BUCKET`, `PARALLEL_SCENE_CONCURRENCY`, and local-model endpoints `DEFAULT_MODEL`/`OLLAMA_BASE_URL`, `TTS_VOXCPM_BASE_URL`, `IMAGE_LEMONADE_BASE_URL`.
+
+### Deploy artifacts (`deploy/`, at workspace root — kept out of `OpenMAIC/`)
+
+- `deploy/tts-voxcpm/`, `deploy/image-sdxl/` — local model servers (`start.sh`/`stop.sh`/README).
+- `deploy/k8s/` — parameterized production manifests + runbook (`REPLACE_ME` = cluster specifics, i.e. `feat-005`).
+- `deploy/loadtest.mjs` — playback load test; `deploy/migrate-media-to-minio.mjs` — one-off media → MinIO migration.
+
+### Remaining (gated on external inputs)
+
+Real AD/LDAP `LdapProvider` (needs AD host/baseDN/bind/group DN); cluster deployment (fill `deploy/k8s` `REPLACE_ME`); i18n the new English UI strings (student landing, login, dashboard).
 
 ## Architecture
 
