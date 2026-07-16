@@ -49,13 +49,27 @@ def get_pipe():
                 from diffusers import StableDiffusionXLPipeline
 
                 device = "cuda" if torch.cuda.is_available() else "cpu"
-                # bf16 on Blackwell avoids the well-known SDXL fp16-VAE NaN/black-image issue.
-                dtype = torch.bfloat16 if device == "cuda" else torch.float32
-                print(f"[sdxl] loading {MODEL_NAME} on {device} ({dtype}) ...", flush=True)
+                # bf16 avoids the SDXL fp16-VAE NaN/black-image bug on Blackwell, but this
+                # host is a 4GB Turing card (no bf16 tensor cores, and no headroom to keep
+                # the full ~7GB pipeline resident) -> fp16 + CPU offload instead.
+                low_vram = device == "cuda" and torch.cuda.get_device_properties(0).total_memory < 8 * 1024**3
+                dtype = torch.float16 if (device == "cuda" and low_vram) else (
+                    torch.bfloat16 if device == "cuda" else torch.float32
+                )
+                print(f"[sdxl] loading {MODEL_NAME} on {device} ({dtype}, low_vram={low_vram}) ...", flush=True)
                 pipe = StableDiffusionXLPipeline.from_pretrained(
                     MODEL_NAME, torch_dtype=dtype, use_safetensors=True, variant="fp16"
                 )
-                pipe = pipe.to(device)
+                if low_vram:
+                    # Model-level offload still stages a whole submodule (the UNet alone is
+                    # ~5GB in fp16) onto the GPU at once, which doesn't fit in ~3.6GB usable
+                    # VRAM. Sequential offload moves individual layers instead -> much lower
+                    # peak memory, much slower.
+                    pipe.enable_sequential_cpu_offload()
+                    pipe.enable_vae_slicing()
+                    pipe.enable_attention_slicing()
+                else:
+                    pipe = pipe.to(device)
                 pipe.set_progress_bar_config(disable=True)
                 _pipe = pipe
                 print("[sdxl] ready", flush=True)
