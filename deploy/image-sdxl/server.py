@@ -57,8 +57,18 @@ def get_pipe():
                     torch.bfloat16 if device == "cuda" else torch.float32
                 )
                 print(f"[sdxl] loading {MODEL_NAME} on {device} ({dtype}, low_vram={low_vram}) ...", flush=True)
+                vae = None
+                if low_vram:
+                    # The stock SDXL VAE overflows to NaN in fp16 (decodes to a solid black
+                    # image) -- this community VAE is numerically rescaled to be fp16-safe.
+                    from diffusers import AutoencoderKL
+
+                    vae = AutoencoderKL.from_pretrained(
+                        "madebyollin/sdxl-vae-fp16-fix", torch_dtype=dtype
+                    )
                 pipe = StableDiffusionXLPipeline.from_pretrained(
-                    MODEL_NAME, torch_dtype=dtype, use_safetensors=True, variant="fp16"
+                    MODEL_NAME, torch_dtype=dtype, use_safetensors=True, variant="fp16",
+                    **({"vae": vae} if vae is not None else {}),
                 )
                 if low_vram:
                     # Model-level offload still stages a whole submodule (the UNet alone is
