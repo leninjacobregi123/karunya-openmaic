@@ -2,12 +2,15 @@
 #
 # Unlike docker-compose.dev.yml (host networking, reuses host node_modules,
 # expects a host-installed Ollama), this file assumes NOTHING about the host
-# except Docker + the NVIDIA Container Toolkit. Every piece of the platform -
-# app, Postgres, Redis, MinIO, the LLM (Ollama), TTS (VoxCPM2), image gen
-# (SDXL) - runs as its own container on a private compose network, addressed
-# by service name. There is exactly ONE unavoidable host-level prerequisite:
-# an NVIDIA driver + the nvidia-container-toolkit installed on the remote
-# machine (GPU passthrough cannot itself be containerized away).
+# except Docker + the NVIDIA Container Toolkit. Postgres, Redis, MinIO, TTS
+# (VoxCPM2), and image gen (SDXL) each run as their own container on a
+# private compose network, addressed by service name. The LLM is NOT
+# containerized here: it's expected to be an OpenAI-compatible server (e.g.
+# vLLM) you run directly on the host on port 8001; the `app` service reaches
+# it via Docker's `host-gateway` DNS entry (see `extra_hosts` below) rather
+# than a service name. There is exactly ONE unavoidable host-level
+# prerequisite: an NVIDIA driver + the nvidia-container-toolkit installed on
+# the remote machine (GPU passthrough cannot itself be containerized away).
 #
 # Quick start on a fresh remote GPU box:
 #   git clone <this repo> && cd maic
@@ -21,6 +24,8 @@
 #   - nvidia-container-toolkit installed + configured (`nvidia-ctk runtime configure
 #     --runtime=docker && systemctl restart docker`)
 #   - verify with: docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu24.04 nvidia-smi
+#   - vLLM (or any OpenAI-compatible server) already running on the host,
+#     listening on :8001, serving whatever model MAIC_DEFAULT_MODEL names
 #
 # Everything below this line runs the same on any such machine.
 
@@ -90,41 +95,9 @@ services:
     networks: [maic-net]
 
   # ---------------------------------------------------------------------------
-  # local GPU models — LLM (Ollama), TTS (VoxCPM2), image gen (SDXL)
+  # local GPU models — TTS (VoxCPM2), image gen (SDXL). The LLM is external
+  # (host-run vLLM on :8001, see `app.extra_hosts` below) - not defined here.
   # ---------------------------------------------------------------------------
-  ollama:
-    image: ollama/ollama:latest
-    volumes:
-      - ollama_data:/root/.ollama
-    healthcheck:
-      test: ['CMD-SHELL', 'ollama list >/dev/null 2>&1']
-      interval: 15s
-      timeout: 10s
-      retries: 20
-      start_period: 30s
-    restart: unless-stopped
-    networks: [maic-net]
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-
-  # One-shot: pull the default model into the ollama volume on first boot.
-  # Re-running is a cheap no-op (ollama pull skips if already present).
-  ollama-pull:
-    image: ollama/ollama:latest
-    depends_on:
-      ollama:
-        condition: service_healthy
-    environment:
-      OLLAMA_HOST: http://ollama:11434
-    entrypoint: ['sh', '-c', 'ollama pull ${MAIC_DEFAULT_OLLAMA_MODEL:-qwen3.6:35b}']
-    restart: 'no'
-    networks: [maic-net]
-
   tts:
     build:
       context: ./deploy/tts-voxcpm
@@ -192,10 +165,20 @@ services:
         condition: service_completed_successfully
       migrate:
         condition: service_completed_successfully
+    # Lets the app container reach the host-run vLLM server on :8001 - a
+    # bridge-networked container can't use "localhost" for that (it'd mean
+    # itself), so this maps a DNS name to the host's gateway IP instead.
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
     environment:
       NODE_ENV: production
-      DEFAULT_MODEL: ${MAIC_DEFAULT_MODEL:-ollama:qwen3.6:35b}
-      OLLAMA_BASE_URL: http://ollama:11434/v1
+      # provider:model string. Must be "lemonade:<the exact model name your
+      # vLLM instance serves>" - e.g. lemonade:Qwen/Qwen2.5-32B-Instruct.
+      # Required (no default): guessing a model name here would fail silently.
+      DEFAULT_MODEL: ${MAIC_DEFAULT_MODEL:?Set MAIC_DEFAULT_MODEL=lemonade:<model-name-vllm-serves> in .env}
+      # 'lemonade' = this app's keyless OpenAI-compatible provider (no API key
+      # needed) - works with any OpenAI-compatible server, including vLLM.
+      LEMONADE_BASE_URL: http://host.docker.internal:8001/v1
       NEXT_PUBLIC_MAIC_EDITOR_ENABLED: 'true'
       PARALLEL_SCENE_CONCURRENCY: '4'
       DATABASE_URL: postgresql://maic:${POSTGRES_PASSWORD:-maic_dev_pw}@postgres:5432/maic
@@ -226,4 +209,3 @@ volumes:
   pg_data:
   redis_data:
   minio_data:
-  ollama_data:

@@ -20,6 +20,12 @@ RUN apt-get update \
 # succeeded.
 ENV PIP_DEFAULT_TIMEOUT=180
 RUN pip install --no-cache-dir --retries 10 torch --index-url https://download.pytorch.org/whl/cu128
+# torch's Linux wheel unconditionally declares triton as a dependency (for
+# torch.compile), but nothing in this server calls torch.compile - it's dead
+# weight, and on some Blackwell consumer cards (e.g. RTX 5090) the triton
+# version torch pins doesn't have working kernels yet. Remove it; eager-mode
+# inference (what we actually use, PYTORCH_JIT=0 below) doesn't need it.
+RUN pip uninstall -y triton
 RUN pip install --no-cache-dir --retries 10 diffusers transformers accelerate safetensors pillow sentencepiece fastapi uvicorn
 
 COPY server.py .
