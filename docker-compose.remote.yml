@@ -1,0 +1,229 @@
+# Fully self-contained GPU stack for a REMOTE deployment.
+#
+# Unlike docker-compose.dev.yml (host networking, reuses host node_modules,
+# expects a host-installed Ollama), this file assumes NOTHING about the host
+# except Docker + the NVIDIA Container Toolkit. Every piece of the platform -
+# app, Postgres, Redis, MinIO, the LLM (Ollama), TTS (VoxCPM2), image gen
+# (SDXL) - runs as its own container on a private compose network, addressed
+# by service name. There is exactly ONE unavoidable host-level prerequisite:
+# an NVIDIA driver + the nvidia-container-toolkit installed on the remote
+# machine (GPU passthrough cannot itself be containerized away).
+#
+# Quick start on a fresh remote GPU box:
+#   git clone <this repo> && cd maic
+#   cp .env.remote.example .env               # then EDIT the passwords/secret
+#   docker compose -f docker-compose.remote.yml up -d --build
+#   docker compose -f docker-compose.remote.yml logs -f app
+#   open http://<remote-host>:3000
+#
+# Prerequisites on the remote host (the one thing this file can't provide):
+#   - NVIDIA driver installed
+#   - nvidia-container-toolkit installed + configured (`nvidia-ctk runtime configure
+#     --runtime=docker && systemctl restart docker`)
+#   - verify with: docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu24.04 nvidia-smi
+#
+# Everything below this line runs the same on any such machine.
+
+services:
+  # ---------------------------------------------------------------------------
+  # data infra
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: maic
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-maic_dev_pw}
+      POSTGRES_DB: maic
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U maic -d maic']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks: [maic-net]
+
+  redis:
+    image: redis:7-alpine
+    command: ['redis-server', '--appendonly', 'yes']
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks: [maic-net]
+
+  minio:
+    image: minio/minio:latest
+    command: ['server', '/data', '--console-address', ':9001']
+    environment:
+      MINIO_ROOT_USER: maic
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-maic_dev_pw}
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks: [maic-net]
+    ports:
+      - '${MAIC_MINIO_CONSOLE_PORT:-9001}:9001' # console UI, optional to expose
+
+  # One-shot: create the media bucket (MinIO doesn't auto-create it).
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 maic ${MINIO_ROOT_PASSWORD:-maic_dev_pw} &&
+      mc mb -p local/maic-media
+      "
+    restart: 'no'
+    networks: [maic-net]
+
+  # ---------------------------------------------------------------------------
+  # local GPU models — LLM (Ollama), TTS (VoxCPM2), image gen (SDXL)
+  # ---------------------------------------------------------------------------
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ['CMD-SHELL', 'ollama list >/dev/null 2>&1']
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 30s
+    restart: unless-stopped
+    networks: [maic-net]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # One-shot: pull the default model into the ollama volume on first boot.
+  # Re-running is a cheap no-op (ollama pull skips if already present).
+  ollama-pull:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ['sh', '-c', 'ollama pull ${MAIC_DEFAULT_OLLAMA_MODEL:-qwen3.6:35b}']
+    restart: 'no'
+    networks: [maic-net]
+
+  tts:
+    build:
+      context: ./deploy/tts-voxcpm
+    restart: unless-stopped
+    networks: [maic-net]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  image:
+    build:
+      context: ./deploy/image-sdxl
+    restart: unless-stopped
+    networks: [maic-net]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # ---------------------------------------------------------------------------
+  # app
+  # ---------------------------------------------------------------------------
+
+  # One-shot: run DB migrations (+ optional dev-account seed) before the app
+  # starts. Built from the `builder` stage (has full deps incl. drizzle-kit),
+  # unlike the slim `runner` stage the app itself uses.
+  migrate:
+    build:
+      context: ./OpenMAIC
+      dockerfile: Dockerfile
+      target: builder
+    working_dir: /app
+    environment:
+      DATABASE_URL: postgresql://maic:${POSTGRES_PASSWORD:-maic_dev_pw}@postgres:5432/maic
+      MAIC_SEED_DEV_USERS: ${MAIC_SEED_DEV_USERS:-true}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - sh
+      - -c
+      - |
+        pnpm exec drizzle-kit migrate
+        if [ "$$MAIC_SEED_DEV_USERS" != "false" ]; then pnpm tsx lib/db/seed.ts; fi
+    restart: 'no'
+    networks: [maic-net]
+
+  app:
+    build:
+      context: ./OpenMAIC
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: production
+      DEFAULT_MODEL: ${MAIC_DEFAULT_MODEL:-ollama:qwen3.6:35b}
+      OLLAMA_BASE_URL: http://ollama:11434/v1
+      NEXT_PUBLIC_MAIC_EDITOR_ENABLED: 'true'
+      PARALLEL_SCENE_CONCURRENCY: '4'
+      DATABASE_URL: postgresql://maic:${POSTGRES_PASSWORD:-maic_dev_pw}@postgres:5432/maic
+      REDIS_URL: redis://redis:6379
+      SESSION_SECRET: ${SESSION_SECRET:?Set a real SESSION_SECRET in .env before starting}
+      AUTH_MODE: dev # dev local accounts; 'ldap' wires the AD adapter later
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: maic
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-maic_dev_pw}
+      S3_BUCKET: maic-media
+      TTS_VOXCPM_BASE_URL: http://tts:8000/v1
+      IMAGE_LEMONADE_BASE_URL: http://image:8001/v1
+    ports:
+      - '${MAIC_APP_PORT:-3000}:3000'
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://localhost:3000/api/health']
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+    networks: [maic-net]
+
+networks:
+  maic-net:
+
+volumes:
+  pg_data:
+  redis_data:
+  minio_data:
+  ollama_data:
