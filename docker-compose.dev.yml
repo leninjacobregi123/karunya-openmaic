@@ -20,10 +20,12 @@ services:
       NEXT_TELEMETRY_DISABLED: "1"
       ALLOW_LOCAL_NETWORKS: "true"
       # Default server-side model -> host Ollama (provider:model; model may contain a colon).
-      # To use your 'ayin' gateway instead, set DEFAULT_MODEL=openai:ayin-main + OPENAI_BASE_URL.
-      DEFAULT_MODEL: "ollama:qwen3.6:35b"
-      OLLAMA_BASE_URL: "http://localhost:11434/v1"
-      OLLAMA_MODELS: "qwen3.6:35b,qwen3.6:27b,gemma4:31b,gpt-oss:120b,gpt-oss:20b,qwen3.5:9b,deepseek-r1:70b"
+      # Override MAIC_DEFAULT_MODEL/MAIC_OLLAMA_URL/MAIC_OLLAMA_MODELS per-machine (start.sh
+      # detects installed Ollama models). To use a hosted provider instead, set
+      # DEFAULT_MODEL=openai:gpt-5.5 + OPENAI_API_KEY directly in your shell before start.sh.
+      DEFAULT_MODEL: "${MAIC_DEFAULT_MODEL:-ollama:qwen3.6:35b}"
+      OLLAMA_BASE_URL: "${MAIC_OLLAMA_URL:-http://localhost:11434/v1}"
+      OLLAMA_MODELS: "${MAIC_OLLAMA_MODELS:-qwen3.6:35b,qwen3.6:27b,gemma4:31b,gpt-oss:120b,gpt-oss:20b,qwen3.5:9b,deepseek-r1:70b}"
       # Keep the full authoring UI available in dev (we are the teacher while testing).
       NEXT_PUBLIC_MAIC_EDITOR_ENABLED: "true"
       # Parallelize scene-content generation in the interactive teacher flow (clamp 0-10).
@@ -31,28 +33,31 @@ services:
       # (production vLLM batches natively).
       PARALLEL_SCENE_CONCURRENCY: "4"
       # --- Platform (Phase 1+). App uses host networking -> localhost ports.
-      DATABASE_URL: "postgresql://maic:maic_dev_pw@localhost:5433/maic"
-      REDIS_URL: "redis://localhost:6379"
+      # All ports below are overridable (MAIC_*_PORT) so this stack can run on a
+      # machine where the defaults are already taken; start.sh picks free ports
+      # per-host and exports these before calling `docker compose up`.
+      DATABASE_URL: "postgresql://maic:maic_dev_pw@localhost:${MAIC_PG_PORT:-5433}/maic"
+      REDIS_URL: "redis://localhost:${MAIC_REDIS_PORT:-6379}"
       SESSION_SECRET: "dev-session-secret-change-me"
       AUTH_MODE: "dev"   # dev local accounts; 'ldap' wires the AD adapter later
-      S3_ENDPOINT: "http://localhost:9000"
+      S3_ENDPOINT: "http://localhost:${MAIC_MINIO_API_PORT:-9000}"
       S3_ACCESS_KEY: "maic"
       S3_SECRET_KEY: "maic_dev_pw"
       S3_BUCKET: "maic-media"
       # Local TTS: VoxCPM server on the host (deploy/tts-voxcpm). Server-managed provider.
       # baseUrl ends with /v1 -> adapter posts to /v1/audio/speech (vllm-omni backend).
-      TTS_VOXCPM_BASE_URL: "http://localhost:8000/v1"
+      TTS_VOXCPM_BASE_URL: "http://localhost:${MAIC_TTS_PORT:-8000}/v1"
       # Local image gen: SDXL server on the host (deploy/image-sdxl). Keyless 'lemonade'
       # provider -> server-managed default for classroom image generation.
       # (Do NOT set IMAGE_OPENAI_API_KEY, or openai-image would be picked first.)
-      IMAGE_LEMONADE_BASE_URL: "http://localhost:8001/v1"
+      IMAGE_LEMONADE_BASE_URL: "http://localhost:${MAIC_IMAGE_PORT:-8001}/v1"
     volumes:
       # Bind-mount source for hot reload (includes host-built node_modules, packages/*/dist, public/vendor).
       - ./OpenMAIC:/app
       # Keep Next's build cache container-side so it doesn't write into the host tree.
       - openmaic_next:/app/.next
     command: >
-      bash -lc "exec pnpm exec next dev -H 0.0.0.0 -p 3000"
+      bash -lc "exec pnpm exec next dev -H 0.0.0.0 -p ${MAIC_APP_PORT:-3000}"
     restart: unless-stopped
 
   # --- Platform data infra (Phase 0). Not yet used by app code; provisioned for
@@ -65,7 +70,7 @@ services:
       POSTGRES_PASSWORD: maic_dev_pw
       POSTGRES_DB: maic
     ports:
-      - "5433:5432"   # host 5433 (5432 already used by a host postgres); app connects to localhost:5433
+      - "${MAIC_PG_PORT:-5433}:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
     healthcheck:
@@ -79,7 +84,7 @@ services:
     image: redis:7-alpine
     command: ["redis-server", "--appendonly", "yes"]
     ports:
-      - "6379:6379"
+      - "${MAIC_REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -96,8 +101,8 @@ services:
       MINIO_ROOT_USER: maic
       MINIO_ROOT_PASSWORD: maic_dev_pw
     ports:
-      - "9000:9000"   # S3 API
-      - "9001:9001"   # console UI
+      - "${MAIC_MINIO_API_PORT:-9000}:9000"       # S3 API
+      - "${MAIC_MINIO_CONSOLE_PORT:-9001}:9001"   # console UI
     volumes:
       - minio_data:/data
     restart: unless-stopped
