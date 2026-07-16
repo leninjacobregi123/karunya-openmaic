@@ -1,0 +1,67 @@
+# Local model serving on GPU nodes. Set nodeSelector/tolerations + GPU resource name
+# to match your cluster (REPLACE_ME). Images are placeholders — build per
+# deploy/tts-voxcpm and deploy/image-sdxl, and use an official vLLM image for text.
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: vllm, namespace: openmaic }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: vllm } }
+  template:
+    metadata: { labels: { app: vllm } }
+    spec:
+      nodeSelector: { REPLACE_ME_gpu_label: 'true' }
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:latest
+          args: ['--model', 'Qwen/Qwen2.5-72B-Instruct', '--port', '8000']
+          ports: [{ containerPort: 8000 }]
+          resources:
+            limits: { REPLACE_ME/gpu: 1 } # e.g. nvidia.com/gpu: 1
+---
+apiVersion: v1
+kind: Service
+metadata: { name: vllm, namespace: openmaic }
+spec: { selector: { app: vllm }, ports: [{ port: 8000, targetPort: 8000 }] }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: voxcpm, namespace: openmaic }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: voxcpm } }
+  template:
+    metadata: { labels: { app: voxcpm } }
+    spec:
+      nodeSelector: { REPLACE_ME_gpu_label: 'true' }
+      containers:
+        - name: voxcpm
+          image: REPLACE_ME_REGISTRY/voxcpm-tts:latest # containerize deploy/tts-voxcpm
+          ports: [{ containerPort: 8000 }]
+          resources: { limits: { REPLACE_ME/gpu: 1 } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: voxcpm, namespace: openmaic }
+spec: { selector: { app: voxcpm }, ports: [{ port: 8000, targetPort: 8000 }] }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: sdxl, namespace: openmaic }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: sdxl } }
+  template:
+    metadata: { labels: { app: sdxl } }
+    spec:
+      nodeSelector: { REPLACE_ME_gpu_label: 'true' }
+      containers:
+        - name: sdxl
+          image: REPLACE_ME_REGISTRY/sdxl-image:latest # containerize deploy/image-sdxl
+          ports: [{ containerPort: 8001 }]
+          resources: { limits: { REPLACE_ME/gpu: 1 } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: sdxl, namespace: openmaic }
+spec: { selector: { app: sdxl }, ports: [{ port: 8001, targetPort: 8001 }] }

@@ -1,0 +1,23 @@
+# Ingress (TLS) → web service. Set ingressClassName + host + TLS to your cluster.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: openmaic
+  namespace: openmaic
+  annotations:
+    # e.g. cert-manager: cert-manager.io/cluster-issuer: REPLACE_ME
+    nginx.ingress.kubernetes.io/proxy-body-size: '200m' # PDF uploads
+    nginx.ingress.kubernetes.io/proxy-read-timeout: '300' # SSE chat streams
+spec:
+  ingressClassName: REPLACE_ME # e.g. nginx
+  tls:
+    - hosts: ['REPLACE_ME.karunya.edu']
+      secretName: openmaic-tls
+  rules:
+    - host: REPLACE_ME.karunya.edu
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service: { name: web, port: { number: 80 } }

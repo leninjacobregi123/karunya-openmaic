@@ -1,0 +1,75 @@
+# Stateless Next.js web tier (horizontally scalable) + autoscaler.
+# PREREQUISITE for replicas > 1: media served from MinIO and generation jobs on the
+# Redis queue (see deploy/k8s/README.md "Multi-replica prerequisites"). Until then,
+# pin replicas: 1.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: openmaic
+spec:
+  replicas: 3
+  selector: { matchLabels: { app: web } }
+  template:
+    metadata: { labels: { app: web } }
+    spec:
+      containers:
+        - name: web
+          image: REPLACE_ME_REGISTRY/openmaic:latest # built from OpenMAIC/Dockerfile (next start, standalone)
+          ports: [{ containerPort: 3000 }]
+          envFrom:
+            - configMapRef: { name: openmaic-config }
+            - secretRef: { name: openmaic-secrets }
+          readinessProbe:
+            httpGet: { path: /api/health, port: 3000 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /api/health, port: 3000 }
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests: { cpu: '1', memory: 1Gi }
+            limits: { cpu: '2', memory: 2Gi }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: web, namespace: openmaic }
+spec:
+  selector: { app: web }
+  ports: [{ port: 80, targetPort: 3000 }]
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: { name: web, namespace: openmaic }
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: web }
+  minReplicas: 3
+  maxReplicas: 12
+  metrics:
+    - type: Resource
+      resource: { name: cpu, target: { type: Utilization, averageUtilization: 70 } }
+---
+# Worker tier: runs generation/publish jobs pulled from the Redis queue
+# (requires the in-memory job Map -> Redis swap; see README). Near the GPUs.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: openmaic
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: worker } }
+  template:
+    metadata: { labels: { app: worker } }
+    spec:
+      containers:
+        - name: worker
+          image: REPLACE_ME_REGISTRY/openmaic:latest
+          command: ['node', 'scripts/worker.js'] # TODO: worker entrypoint (Phase 5 code task)
+          envFrom:
+            - configMapRef: { name: openmaic-config }
+            - secretRef: { name: openmaic-secrets }
+          resources:
+            requests: { cpu: '1', memory: 2Gi }
+            limits: { cpu: '2', memory: 4Gi }

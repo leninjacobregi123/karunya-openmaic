@@ -2,6 +2,7 @@ import { promises as fs, createReadStream } from 'fs';
 import path from 'path';
 import { NextRequest, NextResponse } from 'next/server';
 import { CLASSROOMS_DIR, isValidClassroomId } from '@/lib/server/classroom-storage';
+import { getMediaStream, statMedia } from '@/lib/server/s3';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('ClassroomMedia');
@@ -43,6 +44,36 @@ export async function GET(
     return NextResponse.json({ error: 'Invalid path' }, { status: 404 });
   }
 
+  const ext = path.extname(joined).toLowerCase();
+  const contentType = MIME_TYPES[ext] || 'application/octet-stream';
+
+  // Serve from MinIO first (shared across replicas); fall back to local disk below.
+  const s3key = `classrooms/${classroomId}/${joined}`;
+  const s3stat = await statMedia(s3key);
+  if (s3stat) {
+    const nodeStream = await getMediaStream(s3key);
+    if (nodeStream) {
+      const webStream = new ReadableStream({
+        start(controller) {
+          nodeStream.on('data', (chunk: Buffer | string) => controller.enqueue(chunk));
+          nodeStream.on('end', () => controller.close());
+          nodeStream.on('error', (err) => controller.error(err));
+        },
+        cancel() {
+          nodeStream.destroy();
+        },
+      });
+      return new NextResponse(webStream, {
+        status: 200,
+        headers: {
+          'Content-Type': contentType,
+          'Content-Length': String(s3stat.size),
+          'Cache-Control': 'public, max-age=86400, immutable',
+        },
+      });
+    }
+  }
+
   const filePath = path.join(CLASSROOMS_DIR, classroomId, ...pathSegments);
   const resolvedBase = path.resolve(CLASSROOMS_DIR, classroomId);
 
@@ -57,9 +88,6 @@ export async function GET(
     if (!stat.isFile()) {
       return NextResponse.json({ error: 'Not found' }, { status: 404 });
     }
-
-    const ext = path.extname(realPath).toLowerCase();
-    const contentType = MIME_TYPES[ext] || 'application/octet-stream';
 
     // Stream the file to avoid loading large videos into memory
     const stream = createReadStream(realPath);
