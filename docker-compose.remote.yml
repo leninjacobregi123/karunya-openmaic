@@ -6,11 +6,13 @@
 # (VoxCPM2), and image gen (SDXL) each run as their own container on a
 # private compose network, addressed by service name. The LLM is NOT
 # containerized here: it's expected to be an OpenAI-compatible server (e.g.
-# vLLM) you run directly on the host on port 8001; the `app` service reaches
-# it via Docker's `host-gateway` DNS entry (see `extra_hosts` below) rather
-# than a service name. There is exactly ONE unavoidable host-level
-# prerequisite: an NVIDIA driver + the nvidia-container-toolkit installed on
-# the remote machine (GPU passthrough cannot itself be containerized away).
+# vLLM) reachable on port 8001, either directly on this host (the `app`
+# service reaches it via Docker's `host-gateway` DNS entry, see `extra_hosts`
+# below) or on a different machine on the network (set MAIC_VLLM_BASE_URL in
+# .env, e.g. http://192.168.x.x:8001/v1). There is exactly ONE unavoidable
+# host-level prerequisite: an NVIDIA driver + the nvidia-container-toolkit
+# installed on the remote machine (GPU passthrough cannot itself be
+# containerized away).
 #
 # Quick start on a fresh remote GPU box:
 #   git clone <this repo> && cd maic
@@ -24,8 +26,9 @@
 #   - nvidia-container-toolkit installed + configured (`nvidia-ctk runtime configure
 #     --runtime=docker && systemctl restart docker`)
 #   - verify with: docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu24.04 nvidia-smi
-#   - vLLM (or any OpenAI-compatible server) already running on the host,
-#     listening on :8001, serving whatever model MAIC_DEFAULT_MODEL names
+#   - vLLM (or any OpenAI-compatible server) already running and reachable on
+#     :8001 (this host or another machine on the network - see
+#     MAIC_VLLM_BASE_URL in .env), serving whatever model MAIC_DEFAULT_MODEL names
 #
 # Everything below this line runs the same on any such machine.
 
@@ -165,9 +168,11 @@ services:
         condition: service_completed_successfully
       migrate:
         condition: service_completed_successfully
-    # Lets the app container reach the host-run vLLM server on :8001 - a
-    # bridge-networked container can't use "localhost" for that (it'd mean
-    # itself), so this maps a DNS name to the host's gateway IP instead.
+    # Lets the app container reach a vLLM server running directly on THIS
+    # host (bridge-networked containers can't use "localhost" for that - it'd
+    # mean itself) via a DNS name mapped to the host's gateway IP. Harmless
+    # to keep even when vLLM lives on a different machine (MAIC_VLLM_BASE_URL
+    # below then points elsewhere and this alias just goes unused).
     extra_hosts:
       - 'host.docker.internal:host-gateway'
     environment:
@@ -178,7 +183,10 @@ services:
       DEFAULT_MODEL: ${MAIC_DEFAULT_MODEL:?Set MAIC_DEFAULT_MODEL=lemonade:<model-name-vllm-serves> in .env}
       # 'lemonade' = this app's keyless OpenAI-compatible provider (no API key
       # needed) - works with any OpenAI-compatible server, including vLLM.
-      LEMONADE_BASE_URL: http://host.docker.internal:8001/v1
+      # Defaults to the host vLLM is normally documented as running on; set
+      # MAIC_VLLM_BASE_URL in .env if vLLM instead runs on a different
+      # machine on the network (e.g. http://192.168.x.x:8001/v1).
+      LEMONADE_BASE_URL: ${MAIC_VLLM_BASE_URL:-http://host.docker.internal:8001/v1}
       NEXT_PUBLIC_MAIC_EDITOR_ENABLED: 'true'
       PARALLEL_SCENE_CONCURRENCY: '4'
       DATABASE_URL: postgresql://maic:${POSTGRES_PASSWORD:-maic_dev_pw}@postgres:5432/maic
