@@ -4,31 +4,42 @@
 # expects a host-installed Ollama), this file assumes NOTHING about the host
 # except Docker + the NVIDIA Container Toolkit. Postgres, Redis, MinIO, TTS
 # (VoxCPM2), and image gen (SDXL) each run as their own container on a
-# private compose network, addressed by service name. The LLM is NOT
-# containerized here: it's expected to be an OpenAI-compatible server (e.g.
-# vLLM) reachable on port 8001, either directly on this host (the `app`
-# service reaches it via Docker's `host-gateway` DNS entry, see `extra_hosts`
-# below) or on a different machine on the network (set MAIC_VLLM_BASE_URL in
-# .env, e.g. http://192.168.x.x:8001/v1). There is exactly ONE unavoidable
-# host-level prerequisite: an NVIDIA driver + the nvidia-container-toolkit
-# installed on the remote machine (GPU passthrough cannot itself be
-# containerized away).
+# private compose network, addressed by service name. There is exactly ONE
+# unavoidable host-level prerequisite: an NVIDIA driver + the
+# nvidia-container-toolkit installed on the remote machine (GPU passthrough
+# cannot itself be containerized away).
 #
-# Quick start on a fresh remote GPU box:
+# The LLM has two supported setups:
+#   1. External vLLM (or any OpenAI-compatible server) you already run
+#      yourself - directly on this host, or on a different machine on the
+#      network. Default target is this host's :8001 via Docker's
+#      `host-gateway` DNS entry (see `app.extra_hosts`); point elsewhere with
+#      MAIC_VLLM_BASE_URL in .env, e.g. http://192.168.x.x:8001/v1.
+#   2. Containerized vLLM (the `vllm` service below, profile `local-vllm`) -
+#      for machines where you can't install anything outside Docker, so vLLM
+#      itself has to run as a container too. Serves openai/gpt-oss-20b by
+#      default (sized for a single 32GB GPU). Enable with
+#      `--profile local-vllm` on the `up` command, and set
+#      MAIC_VLLM_BASE_URL=http://vllm:8000/v1 in .env to point the app at it.
+#
+# Quick start on a fresh remote GPU box (external vLLM):
 #   git clone <this repo> && cd maic
 #   cp .env.remote.example .env               # then EDIT the passwords/secret
 #   docker compose -f docker-compose.remote.yml up -d --build
 #   docker compose -f docker-compose.remote.yml logs -f app
 #   open http://<remote-host>:3000
 #
+# Quick start with the containerized vLLM instead (setup 2 above):
+#   docker compose -f docker-compose.remote.yml --profile local-vllm up -d --build
+#
 # Prerequisites on the remote host (the one thing this file can't provide):
 #   - NVIDIA driver installed
 #   - nvidia-container-toolkit installed + configured (`nvidia-ctk runtime configure
 #     --runtime=docker && systemctl restart docker`)
 #   - verify with: docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu24.04 nvidia-smi
-#   - vLLM (or any OpenAI-compatible server) already running and reachable on
-#     :8001 (this host or another machine on the network - see
-#     MAIC_VLLM_BASE_URL in .env), serving whatever model MAIC_DEFAULT_MODEL names
+#   - if using setup 1: vLLM (or any OpenAI-compatible server) already
+#     running and reachable on :8001, serving whatever model
+#     MAIC_DEFAULT_MODEL names
 #
 # Everything below this line runs the same on any such machine.
 
@@ -128,6 +139,42 @@ services:
               capabilities: [gpu]
 
   # ---------------------------------------------------------------------------
+  # LLM — vLLM serving openai/gpt-oss-20b, containerized. Optional: only
+  # starts with `docker compose --profile local-vllm up`, for machines that
+  # can't install anything outside Docker (so vLLM itself has to run as a
+  # container here too) and don't have GPU headroom for anything bigger.
+  # Machines pointing at vLLM running elsewhere (host-installed, or a
+  # different box - see MAIC_VLLM_BASE_URL below) skip this profile entirely
+  # and never build/run it.
+  # ---------------------------------------------------------------------------
+  vllm:
+    image: vllm/vllm-openai:latest
+    profiles: ['local-vllm']
+    command: ['--model', 'openai/gpt-oss-20b', '--port', '8000']
+    ipc: host # vLLM's docs recommend this for its worker processes' shared memory
+    volumes:
+      - vllm_cache:/root/.cache/huggingface # persist the ~13GB model download across restarts
+    restart: unless-stopped
+    networks: [maic-net]
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\"",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 300s # first boot downloads the model; give it room
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # ---------------------------------------------------------------------------
   # app
   # ---------------------------------------------------------------------------
 
@@ -217,3 +264,4 @@ volumes:
   pg_data:
   redis_data:
   minio_data:
+  vllm_cache:
