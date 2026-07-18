@@ -70,12 +70,12 @@ grep -q '^MINIO_ROOT_PASSWORD=change-me-minio$' .env && set_env MINIO_ROOT_PASSW
 grep -q '^SESSION_SECRET=change-me-to-a-long-random-string$' .env && set_env SESSION_SECRET "$(openssl rand -hex 32)"
 
 if [ "$VLLM_MODE" = "external" ]; then
-  set_env MAIC_DEFAULT_MODEL "lemonade:${EXTERNAL_VLLM_MODEL}"
+  set_env MAIC_VLLM_MODEL "${EXTERNAL_VLLM_MODEL}"
   set_env MAIC_VLLM_BASE_URL "$EXTERNAL_VLLM_URL"
   PROFILE_ARGS=()
   echo "==> configured for external vLLM at ${EXTERNAL_VLLM_URL} (model: ${EXTERNAL_VLLM_MODEL})"
 else
-  set_env MAIC_DEFAULT_MODEL "lemonade:openai/gpt-oss-20b"
+  set_env MAIC_VLLM_MODEL "openai/gpt-oss-20b"
   set_env MAIC_VLLM_BASE_URL "http://vllm:8000/v1"
   PROFILE_ARGS=(--profile local-vllm)
   echo "==> configured for containerized vLLM (openai/gpt-oss-20b)"

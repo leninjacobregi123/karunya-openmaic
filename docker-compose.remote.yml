@@ -251,10 +251,22 @@ services:
       - 'host.docker.internal:host-gateway'
     environment:
       NODE_ENV: production
-      # provider:model string. Must be "lemonade:<the exact model name your
-      # vLLM instance serves>" - e.g. lemonade:Qwen/Qwen2.5-32B-Instruct.
-      # Required (no default): guessing a model name here would fail silently.
-      DEFAULT_MODEL: ${MAIC_DEFAULT_MODEL:?Set MAIC_DEFAULT_MODEL=lemonade:<model-name-vllm-serves> in .env}
+      # Bare model name vLLM serves - e.g. openai/gpt-oss-120b. Required (no
+      # default): guessing here would fail silently.
+      #
+      # IMPORTANT: DEFAULT_MODEL alone does NOT make the app actually use
+      # this model. The interactive UI always sends an explicit x-model
+      # header built client-side from the provider's *advertised* model
+      # list (GET /api/server-providers) - DEFAULT_MODEL is only consulted
+      # as a last-resort fallback that path never reaches (it's real, but
+      # effectively eval-script-only). LEMONADE_MODELS is what actually
+      # populates that advertised list, which is what the client-side model
+      # picker defaults to - without it, the client falls back to the
+      # lemonade provider's built-in placeholder model
+      # (lib/ai/providers.ts) instead of your real one. Both are derived
+      # from MAIC_VLLM_MODEL below so they can't drift apart.
+      DEFAULT_MODEL: lemonade:${MAIC_VLLM_MODEL:?Set MAIC_VLLM_MODEL=<model-name-vllm-serves> in .env}
+      LEMONADE_MODELS: ${MAIC_VLLM_MODEL:?Set MAIC_VLLM_MODEL=<model-name-vllm-serves> in .env}
       # 'lemonade' = this app's keyless OpenAI-compatible provider (no API key
       # needed) - works with any OpenAI-compatible server, including vLLM.
       # Defaults to the host vLLM is normally documented as running on; set
