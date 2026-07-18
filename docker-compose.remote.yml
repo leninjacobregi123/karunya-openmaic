@@ -164,6 +164,14 @@ services:
     image: vllm/vllm-openai:gptoss
     profiles: ['local-vllm']
     command: ['--model', 'openai/gpt-oss-20b', '--port', '8000']
+    environment:
+      # Some networks (e.g. a campus/lab proxy) intercept HF's newer "Xet"
+      # storage backend (xethub.hf.co, *.aws.cdn.hf.co) without a trusted
+      # cert for it - SSL_CERT_VERIFY_FAILED / "self-signed certificate in
+      # certificate chain" - while the classic CDN (huggingface.co itself)
+      # comes through clean. This forces huggingface_hub back to that
+      # classic download path instead of Xet.
+      HF_HUB_DISABLE_XET: '1'
     # vLLM's docs suggest --ipc=host for shared memory between its worker
     # processes, but sharing the host's IPC namespace is exactly the kind of
     # privilege-escalation setting shared-host admin policies (e.g. an OPA
