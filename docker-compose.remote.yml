@@ -148,7 +148,20 @@ services:
   # and never build/run it.
   # ---------------------------------------------------------------------------
   vllm:
-    image: vllm/vllm-openai:latest
+    # Pinned, NOT :latest. vLLM's :latest tag has moved to a CUDA>=13.0 base
+    # (NVIDIA_REQUIRE_CUDA=cuda>=13.0) - it'll fail outright
+    # ("nvidia-container-cli: requirement error: unsatisfied condition:
+    # cuda>=13.0") on any host whose driver reports a lower max CUDA version
+    # (`nvidia-smi`'s top-right "CUDA Version" field), which is a driver
+    # upgrade you likely can't do on a host you don't control. `:gptoss` is
+    # vLLM's own official image for this exact model (from their gpt-oss
+    # launch announcement, https://vllm.ai/blog/2025-08-05-gpt-oss) and is
+    # built on CUDA 12.8.1 (NVIDIA_REQUIRE_CUDA=cuda>=12.8, confirmed via the
+    # Docker Hub registry API) - if your host's driver maxes out below 12.8,
+    # pick an older vllm/vllm-openai version tag with a matching
+    # CUDA_VERSION instead (check via the registry API, not the Docker Hub
+    # web UI, which doesn't surface this).
+    image: vllm/vllm-openai:gptoss
     profiles: ['local-vllm']
     command: ['--model', 'openai/gpt-oss-20b', '--port', '8000']
     # vLLM's docs suggest --ipc=host for shared memory between its worker
