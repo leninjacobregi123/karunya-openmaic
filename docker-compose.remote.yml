@@ -117,6 +117,13 @@ services:
       context: ./deploy/tts-voxcpm
     restart: unless-stopped
     networks: [maic-net]
+    volumes:
+      # Persists the openbmb/VoxCPM2 download across restarts - also lets
+      # you pre-populate it (see docker-compose.remote.yml's LLM comments
+      # above re: networks that block HF's storage CDN domains) by copying
+      # a `huggingface-cli download` from elsewhere into this volume's
+      # backing dir instead of downloading on first request.
+      - tts_cache:/root/.cache/huggingface
     deploy:
       resources:
         reservations:
@@ -130,6 +137,11 @@ services:
       context: ./deploy/image-sdxl
     restart: unless-stopped
     networks: [maic-net]
+    volumes:
+      # Same rationale as tts_cache above - persists the SDXL download,
+      # which only actually happens on the FIRST real image-generation
+      # request (health checks don't trigger it), not at container start.
+      - image_cache:/root/.cache/huggingface
     deploy:
       resources:
         reservations:
@@ -304,3 +316,5 @@ volumes:
   redis_data:
   minio_data:
   vllm_cache:
+  tts_cache:
+  image_cache:
