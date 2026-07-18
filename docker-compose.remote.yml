@@ -151,7 +151,13 @@ services:
     image: vllm/vllm-openai:latest
     profiles: ['local-vllm']
     command: ['--model', 'openai/gpt-oss-20b', '--port', '8000']
-    ipc: host # vLLM's docs recommend this for its worker processes' shared memory
+    # vLLM's docs suggest --ipc=host for shared memory between its worker
+    # processes, but sharing the host's IPC namespace is exactly the kind of
+    # privilege-escalation setting shared-host admin policies (e.g. an OPA
+    # docker-authz plugin) commonly reject outright - as opposed to a plain
+    # per-container shm size bump, which stays inside this container's own
+    # namespace and needs no elevated privilege.
+    shm_size: '2gb'
     volumes:
       - vllm_cache:/root/.cache/huggingface # persist the ~13GB model download across restarts
     restart: unless-stopped
