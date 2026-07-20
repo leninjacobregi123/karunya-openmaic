@@ -41,6 +41,24 @@ _pipe = None
 _lock = threading.Lock()
 
 
+def _resolve_local(repo_id: str) -> str:
+    # diffusers' from_pretrained(repo_id, variant=...) needs to consult the Hub API to
+    # figure out which variant files exist, EVEN when HF_HUB_OFFLINE=1 and everything is
+    # already cached (a cache populated by our own snapshot_download rather than by
+    # diffusers itself isn't trusted the same way) - it fails with "model is not cached
+    # locally" despite the files being right there. Resolving to the concrete local
+    # snapshot directory first sidesteps that: diffusers treats a filesystem path as a
+    # pure local load with no Hub/variant/network resolution at all.
+    from huggingface_hub import snapshot_download
+
+    try:
+        return snapshot_download(repo_id=repo_id, local_files_only=True)
+    except Exception:
+        # Not cached (or only partially) - fall back to the repo id so the normal
+        # online download path (dev flow: first-request download) still works.
+        return repo_id
+
+
 def get_pipe():
     global _pipe
     if _pipe is None:
@@ -64,10 +82,10 @@ def get_pipe():
                     from diffusers import AutoencoderKL
 
                     vae = AutoencoderKL.from_pretrained(
-                        "madebyollin/sdxl-vae-fp16-fix", torch_dtype=dtype
+                        _resolve_local("madebyollin/sdxl-vae-fp16-fix"), torch_dtype=dtype
                     )
                 pipe = StableDiffusionXLPipeline.from_pretrained(
-                    MODEL_NAME, torch_dtype=dtype, use_safetensors=True, variant="fp16",
+                    _resolve_local(MODEL_NAME), torch_dtype=dtype, use_safetensors=True, variant="fp16",
                     **({"vae": vae} if vae is not None else {}),
                 )
                 if low_vram:
