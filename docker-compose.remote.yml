@@ -117,6 +117,17 @@ services:
       context: ./deploy/tts-voxcpm
     restart: unless-stopped
     networks: [maic-net]
+    environment:
+      # Same Xet-CDN-blocked-by-network issue as the vllm service below: even
+      # with a fully-primed cache, huggingface_hub still tries to verify/
+      # reconstruct files via HF's Xet CAS backend (cas-server.xethub.hf.co)
+      # unless this is disabled, which fails outright on networks that block
+      # it. HF_HUB_OFFLINE additionally guarantees this service NEVER makes
+      # an HF network call once primed - it fails loudly instead of silently
+      # reaching out, so "runs from the container's cache only" is enforced,
+      # not just hoped for.
+      HF_HUB_DISABLE_XET: '1'
+      HF_HUB_OFFLINE: '1'
     volumes:
       # Persists the openbmb/VoxCPM2 download across restarts - also lets
       # you pre-populate it (see docker-compose.remote.yml's LLM comments
@@ -137,6 +148,11 @@ services:
       context: ./deploy/image-sdxl
     restart: unless-stopped
     networks: [maic-net]
+    environment:
+      # See the tts service's identical comment above - same Xet CDN issue,
+      # same fix.
+      HF_HUB_DISABLE_XET: '1'
+      HF_HUB_OFFLINE: '1'
     volumes:
       # Same rationale as tts_cache above - persists the SDXL download,
       # which only actually happens on the FIRST real image-generation
