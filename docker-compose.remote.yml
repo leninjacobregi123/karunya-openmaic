@@ -216,6 +216,14 @@ services:
     environment:
       HF_HUB_OFFLINE: '1' # belt-and-suspenders: a local path load shouldn't touch the network anyway
       HF_HUB_DISABLE_XET: '1'
+      # gpt-oss's attention-sinks implementation asserts FlashAttention 3 -
+      # this image doesn't even have the vllm_flash_attn package installed
+      # (confirmed via import check), so the default backend selection always
+      # hits that assertion on this GPU (sm_120 / Blackwell consumer card,
+      # confirmed via torch.cuda.get_device_capability()). FlashInfer 0.2.8 IS
+      # present in this image and supports attention sinks without needing
+      # FA3, so force it explicitly instead of relying on auto-detection.
+      VLLM_ATTENTION_BACKEND: 'FLASHINFER'
     # vLLM's docs suggest --ipc=host for shared memory between its worker
     # processes, but sharing the host's IPC namespace is exactly the kind of
     # privilege-escalation setting shared-host admin policies (e.g. an OPA
