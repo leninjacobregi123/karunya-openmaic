@@ -316,7 +316,11 @@ services:
     ports:
       - '${MAIC_APP_PORT:-3000}:3000'
     healthcheck:
-      test: ['CMD', 'wget', '-qO-', 'http://localhost:3000/api/health']
+      # 127.0.0.1, not localhost: this container's /etc/resolv.conf resolves
+      # "localhost" to ::1 only, but Next's server binds IPv4-only (0.0.0.0),
+      # so wget-via-hostname always got connection-refused on the (empty)
+      # IPv6 loopback even though the app was actually up and serving fine.
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:3000/api/health']
       interval: 15s
       timeout: 5s
       retries: 10
