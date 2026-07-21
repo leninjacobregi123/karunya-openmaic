@@ -81,9 +81,25 @@ else
   echo "==> configured for containerized vLLM (openai/gpt-oss-20b)"
 fi
 
-# --- 4. bring the stack up -----------------------------------------------------
-echo "==> starting stack (this can take a while on first run: image builds + model downloads)"
-docker compose -f "$COMPOSE_FILE" "${PROFILE_ARGS[@]}" up -d --build
+# --- 4. build images -----------------------------------------------------------
+echo "==> building images"
+docker compose -f "$COMPOSE_FILE" "${PROFILE_ARGS[@]}" build
+
+# --- 5. prime model caches -------------------------------------------------------
+# Model weights are pre-downloaded and pushed as GitHub Releases (this host's
+# network may not reach HF's storage CDN cleanly) - see prime-model-cache.sh.
+# Idempotent: a no-op if a cache is already populated, so re-running this
+# script (e.g. after a git pull) never re-downloads anything unnecessarily.
+echo "==> priming model caches (skips any model already cached)"
+./prime-model-cache.sh sdxl
+./prime-model-cache.sh voxcpm2
+if [ "$VLLM_MODE" = "local" ]; then
+  ./prime-model-cache.sh gptoss
+fi
+
+# --- 6. bring the stack up -----------------------------------------------------
+echo "==> starting stack"
+docker compose -f "$COMPOSE_FILE" "${PROFILE_ARGS[@]}" up -d
 
 echo
 echo "==> stack starting. Follow progress with:"
