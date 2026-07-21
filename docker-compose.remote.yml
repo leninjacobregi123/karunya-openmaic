@@ -191,14 +191,19 @@ services:
     # web UI, which doesn't surface this).
     image: vllm/vllm-openai:gptoss
     profiles: ['local-vllm']
-    command: ['--model', 'openai/gpt-oss-20b', '--port', '8000']
+    # Local filesystem path, NOT the bare repo id "openai/gpt-oss-20b": some
+    # networks (e.g. a campus/lab proxy) intercept HF's storage CDN
+    # (huggingface.co redirects AND the Xet path both land on domains this
+    # kind of network MITMs with a self-signed cert - SSL_CERT_VERIFY_FAILED)
+    # badly enough that vLLM's own config/tokenizer fetch dies outright, even
+    # with HF_HUB_DISABLE_XET set. A literal path bypasses the Hub client
+    # entirely (pure local load, no network/variant/completeness resolution
+    # at all) - same trick as _resolve_local() in deploy/image-sdxl/server.py.
+    # Primed via `./prime-model-cache.sh gptoss` into vllm_cache below - see
+    # that script for how the directory gets populated.
+    command: ['--model', '/root/.cache/huggingface/local-models/gpt-oss-20b', '--served-model-name', 'openai/gpt-oss-20b', '--port', '8000']
     environment:
-      # Some networks (e.g. a campus/lab proxy) intercept HF's newer "Xet"
-      # storage backend (xethub.hf.co, *.aws.cdn.hf.co) without a trusted
-      # cert for it - SSL_CERT_VERIFY_FAILED / "self-signed certificate in
-      # certificate chain" - while the classic CDN (huggingface.co itself)
-      # comes through clean. This forces huggingface_hub back to that
-      # classic download path instead of Xet.
+      HF_HUB_OFFLINE: '1' # belt-and-suspenders: a local path load shouldn't touch the network anyway
       HF_HUB_DISABLE_XET: '1'
     # vLLM's docs suggest --ipc=host for shared memory between its worker
     # processes, but sharing the host's IPC namespace is exactly the kind of
