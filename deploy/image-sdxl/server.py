@@ -44,19 +44,34 @@ _lock = threading.Lock()
 def _resolve_local(repo_id: str) -> str:
     # diffusers' from_pretrained(repo_id, variant=...) needs to consult the Hub API to
     # figure out which variant files exist, EVEN when HF_HUB_OFFLINE=1 and everything is
-    # already cached (a cache populated by our own snapshot_download rather than by
-    # diffusers itself isn't trusted the same way) - it fails with "model is not cached
-    # locally" despite the files being right there. Resolving to the concrete local
-    # snapshot directory first sidesteps that: diffusers treats a filesystem path as a
-    # pure local load with no Hub/variant/network resolution at all.
-    from huggingface_hub import snapshot_download
+    # already cached - it fails with "model is not cached locally" despite the files
+    # being right there. Resolving to the concrete local snapshot directory first
+    # sidesteps that: diffusers treats a filesystem path as a pure local load with no
+    # Hub/variant/network resolution at all.
+    #
+    # huggingface_hub.snapshot_download(local_files_only=True) looks like the obvious
+    # way to get that path, but it independently re-validates the cache against the
+    # Hub's full file listing and raises IncompleteSnapshotError if ANY repo file is
+    # missing - including ones we never wanted (README, sample images, other precision
+    # variants). Our cache is deliberately partial (fp16-only), so that check always
+    # fails here. Read refs/main -> snapshots/<hash> by hand instead, which is all
+    # diffusers itself actually needs.
+    import os
+    from huggingface_hub.constants import HF_HUB_CACHE
 
+    repo_folder = "models--" + repo_id.replace("/", "--")
+    ref_path = os.path.join(HF_HUB_CACHE, repo_folder, "refs", "main")
     try:
-        return snapshot_download(repo_id=repo_id, local_files_only=True)
-    except Exception:
-        # Not cached (or only partially) - fall back to the repo id so the normal
-        # online download path (dev flow: first-request download) still works.
-        return repo_id
+        with open(ref_path) as f:
+            commit_hash = f.read().strip()
+        snapshot_path = os.path.join(HF_HUB_CACHE, repo_folder, "snapshots", commit_hash)
+        if os.path.isdir(snapshot_path):
+            return snapshot_path
+    except OSError:
+        pass
+    # Not cached (or only partially) - fall back to the repo id so the normal
+    # online download path (dev flow: first-request download) still works.
+    return repo_id
 
 
 def get_pipe():
