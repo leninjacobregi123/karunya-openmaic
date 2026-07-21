@@ -201,7 +201,15 @@ services:
     # at all) - same trick as _resolve_local() in deploy/image-sdxl/server.py.
     # Primed via `./prime-model-cache.sh gptoss` into vllm_cache below - see
     # that script for how the directory gets populated.
-    command: ['--model', '/root/.cache/huggingface/local-models/gpt-oss-20b', '--served-model-name', 'openai/gpt-oss-20b', '--port', '8000']
+    # This GPU is shared with the image/tts services (they stay resident once
+    # warmed, ~16GB combined observed on a 32GB card) - vLLM can't use its
+    # default 90%-of-total/full-131072-context assumptions, which expect
+    # near-exclusive GPU access. max-model-len 32768 is generous for this
+    # app's director/agent turns while cutting KV-cache memory ~4x versus the
+    # model's full context; gpu-memory-utilization 0.5 targets ~15.7GB,
+    # sized to fit what's actually free alongside image/tts. Adjust both if
+    # nvidia-smi shows a different split once all three are warm in practice.
+    command: ['--model', '/root/.cache/huggingface/local-models/gpt-oss-20b', '--served-model-name', 'openai/gpt-oss-20b', '--port', '8000', '--max-model-len', '32768', '--gpu-memory-utilization', '0.5']
     environment:
       HF_HUB_OFFLINE: '1' # belt-and-suspenders: a local path load shouldn't touch the network anyway
       HF_HUB_DISABLE_XET: '1'
