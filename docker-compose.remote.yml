@@ -181,15 +181,25 @@ services:
     # ("nvidia-container-cli: requirement error: unsatisfied condition:
     # cuda>=13.0") on any host whose driver reports a lower max CUDA version
     # (`nvidia-smi`'s top-right "CUDA Version" field), which is a driver
-    # upgrade you likely can't do on a host you don't control. `:gptoss` is
-    # vLLM's own official image for this exact model (from their gpt-oss
-    # launch announcement, https://vllm.ai/blog/2025-08-05-gpt-oss) and is
-    # built on CUDA 12.8.1 (NVIDIA_REQUIRE_CUDA=cuda>=12.8, confirmed via the
-    # Docker Hub registry API) - if your host's driver maxes out below 12.8,
-    # pick an older vllm/vllm-openai version tag with a matching
-    # CUDA_VERSION instead (check via the registry API, not the Docker Hub
-    # web UI, which doesn't surface this).
-    image: vllm/vllm-openai:gptoss
+    # upgrade you likely can't do on a host you don't control.
+    #
+    # v0.10.1, NOT the original :gptoss launch-day tag. :gptoss
+    # (0.10.2.dev2+gf5635d62e, built 2025-08-05) has a real bug on Blackwell
+    # consumer cards (sm_120, e.g. RTX 5090): gpt-oss's attention-sinks
+    # feature asserts either FlashAttention 3 (impossible on Blackwell - FA3
+    # explicitly excludes compute capability >=10 entirely) or, via
+    # FlashInfer, a hard `assert sinks.dtype == torch.float32` that fails
+    # since the model keeps sinks in bf16 - vllm-project/vllm#22279. v0.10.1
+    # (released 2025-08-19, the fix for that exact issue) removes that
+    # assertion in vllm/v1/attention/backends/flashinfer.py, confirmed by
+    # inspecting both images' source directly. Still CUDA 12.8 (confirmed via
+    # `docker run --entrypoint python3 vllm/vllm-openai:v0.10.1 -c "import
+    # torch; print(torch.version.cuda)"` -> 12.8), so no driver problem.
+    # (Note: this version's TRT-LLM auto-routing for sinks requires compute
+    # capability *exactly* 100/SM100 i.e. datacenter Blackwell - sm_120
+    # consumer cards don't qualify, hence forcing FLASHINFER explicitly below
+    # rather than relying on that path.)
+    image: vllm/vllm-openai:v0.10.1
     profiles: ['local-vllm']
     # Local filesystem path, NOT the bare repo id "openai/gpt-oss-20b": some
     # networks (e.g. a campus/lab proxy) intercept HF's storage CDN
@@ -216,19 +226,11 @@ services:
     environment:
       HF_HUB_OFFLINE: '1' # belt-and-suspenders: a local path load shouldn't touch the network anyway
       HF_HUB_DISABLE_XET: '1'
-      # gpt-oss's attention-sinks implementation asserts FlashAttention 3 -
-      # this image doesn't even have the vllm_flash_attn package installed
-      # (confirmed via import check), so the default backend selection always
-      # hits that assertion on this GPU (sm_120 / Blackwell consumer card,
-      # confirmed via torch.cuda.get_device_capability()). FlashInfer's own
-      # vLLM integration in THIS build additionally has a bug where the sinks
-      # tensor isn't kept in float32 through the bf16 downcast ("Sinks must
-      # be of type float32") - a known day-one gpt-oss/Blackwell issue
-      # (vllm-project/vllm#22279). TRT-LLM's attention kernel path sidesteps
-      # both bugs and is confirmed working for gpt-oss-20b on 5090-class
-      # cards without needing a newer vLLM build (which would need CUDA 12.9+
-      # anyway - incompatible with this host's 12.8-max driver).
-      VLLM_USE_TRTLLM_ATTENTION: '1'
+      # Force FlashInfer explicitly rather than relying on auto-detection:
+      # FA3 is impossible on this GPU regardless (Blackwell is excluded from
+      # FA3 entirely), and this image (unlike :gptoss) doesn't have the sinks
+      # dtype bug in its FlashInfer backend - see the image tag comment above.
+      VLLM_ATTENTION_BACKEND: 'FLASHINFER'
     # vLLM's docs suggest --ipc=host for shared memory between its worker
     # processes, but sharing the host's IPC namespace is exactly the kind of
     # privilege-escalation setting shared-host admin policies (e.g. an OPA
