@@ -216,13 +216,15 @@ services:
     # default 90%-of-total/full-131072-context assumptions, which expect
     # near-exclusive GPU access. max-model-len 32768 is generous for this
     # app's director/agent turns while cutting KV-cache memory ~4x versus the
-    # model's full context. gpu-memory-utilization 0.42 targets ~13.2GB -
-    # vLLM's own free-memory check (measured just before allocating, ~14.9GB
-    # observed) runs lower than nvidia-smi's reported free (~15.5GB, presumably
-    # CUDA context/driver reservation), so this leaves real margin below the
-    # tighter of the two rather than nvidia-smi's more optimistic number.
-    # Adjust if nvidia-smi shows a different split once all three are warm.
-    command: ['--model', '/root/.cache/huggingface/local-models/gpt-oss-20b', '--served-model-name', 'openai/gpt-oss-20b', '--port', '8000', '--max-model-len', '32768', '--gpu-memory-utilization', '0.42']
+    # model's full context. 0.42 (~13.2GB) still hit a CUDA OOM on shannon
+    # ("Tried to allocate 1.08 GiB... 1.01 GiB is free") - weight loading
+    # allocates progressively as shards land, ahead of vLLM's own KV-cache
+    # reservation accounting, so real usage transiently overshoots the
+    # gpu-memory-utilization target before that reservation ever kicks in.
+    # 0.35 (~11GB) leaves a much bigger real cushion (~4.5GB vs ~1.7GB)
+    # against that overshoot. Costs KV-cache/concurrency headroom, but
+    # correctness first on a GPU this tightly shared with image/tts.
+    command: ['--model', '/root/.cache/huggingface/local-models/gpt-oss-20b', '--served-model-name', 'openai/gpt-oss-20b', '--port', '8000', '--max-model-len', '32768', '--gpu-memory-utilization', '0.35']
     environment:
       HF_HUB_OFFLINE: '1' # belt-and-suspenders: a local path load shouldn't touch the network anyway
       HF_HUB_DISABLE_XET: '1'
