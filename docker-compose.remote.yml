@@ -231,17 +231,22 @@ services:
     # exceeded the observed 14.89GiB free with image/tts resident. The valid
     # window here is genuinely narrow (~0.44-0.47): must clear 13.7GiB of
     # weights but stay under ~14.9GiB real free. 0.46 (~14.43GiB) covers the
-    # weights and passes preflight, but leaves only ~0.02GiB for KV cache once
-    # torch.compile/cudagraph capture overhead is accounted for - nowhere near
-    # the 0.80GiB a 32768-token context needs (confirmed: engine reported
-    # "estimated maximum model length is 448" at that budget). There simply
-    # isn't more real memory to give it while image/tts stay resident, so
-    # max-model-len comes down instead, to 4096 - the KV cache this GPU can
-    # actually spare buys a real, if shorter, context rather than none at all.
-    # If this GPU's other-service footprint grows,
-    # `nvidia-smi --query-gpu=memory.free --format=csv` and recompute - there
-    # may be no valid utilization value left if free drops much below ~14.2GiB.
-    command: ['--model', '/root/.cache/huggingface/local-models/gpt-oss-20b', '--served-model-name', 'openai/gpt-oss-20b', '--port', '8000', '--max-model-len', '4096', '--gpu-memory-utilization', '0.46']
+    # weights and passes preflight, but "Available KV cache memory" came out
+    # to only ~0.02GiB - and confirmed via two separate runs (max-model-len
+    # 32768 and 4096 both reported the identical 0.02GiB) that this number is
+    # a function of gpu-memory-utilization ALONE, not max-model-len - it's
+    # (budget - peak process usage during weight load + torch.compile/
+    # cudagraph capture), computed before max-model-len is even considered.
+    # So lowering max-model-len alone can't fix an empty KV budget; only
+    # raising utilization can. Peak process usage backs out to ~14.41GiB
+    # (14.43 - 0.02), leaving genuine headroom up to the ~14.89GiB real-free
+    # ceiling - 0.47 (~14.74GiB budget) should yield ~0.33GiB available,
+    # comfortably above the ~0.14GiB max-model-len=4096 needs, while staying
+    # under the 0.48-that-failed-preflight line. If this GPU's other-service
+    # footprint grows, `nvidia-smi --query-gpu=memory.free --format=csv` and
+    # recompute - there may be no valid utilization value left if free drops
+    # much below ~14.5GiB.
+    command: ['--model', '/root/.cache/huggingface/local-models/gpt-oss-20b', '--served-model-name', 'openai/gpt-oss-20b', '--port', '8000', '--max-model-len', '4096', '--gpu-memory-utilization', '0.47']
     environment:
       HF_HUB_OFFLINE: '1' # belt-and-suspenders: a local path load shouldn't touch the network anyway
       HF_HUB_DISABLE_XET: '1'
