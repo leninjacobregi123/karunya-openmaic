@@ -226,12 +226,18 @@ services:
     # the cache blocks", i.e. negative KV budget - see PR #26 for why the
     # raw weight-loading OOM those were chasing was actually an allocator
     # fragmentation bug, fixed separately via PYTORCH_CUDA_ALLOC_CONF below).
-    # 0.48 (~15.06GiB) covers the weights with a small real KV-cache pool
-    # left over, while staying under the ~15.48GiB actually free on shannon
-    # with image/tts resident (measured via nvidia-smi) - leaves ~0.4GiB of
-    # physical slack. If this GPU's other-service footprint grows, re-check
-    # `nvidia-smi --query-gpu=memory.free --format=csv` and recompute.
-    command: ['--model', '/root/.cache/huggingface/local-models/gpt-oss-20b', '--served-model-name', 'openai/gpt-oss-20b', '--port', '8000', '--max-model-len', '32768', '--gpu-memory-utilization', '0.48']
+    # 0.48 (~15.06GiB) turned out too HIGH the other way: vLLM's own preflight
+    # check ("Free memory on device (14.89/31.37 GiB) on startup is less
+    # than desired GPU memory utilization") refuses to even start if the
+    # utilization*total budget exceeds real free memory at boot, and 15.06
+    # exceeded the observed 14.89GiB free with image/tts resident. The valid
+    # window here is genuinely narrow (~0.44-0.47): must clear 13.7GiB of
+    # weights but stay under ~14.9GiB real free. 0.46 (~14.43GiB) covers the
+    # weights with a small (~0.7GiB) real KV-cache pool while leaving ~0.46GiB
+    # of preflight margin. If this GPU's other-service footprint grows,
+    # `nvidia-smi --query-gpu=memory.free --format=csv` and recompute - there
+    # may be no valid utilization value left if free drops much below ~14.2GiB.
+    command: ['--model', '/root/.cache/huggingface/local-models/gpt-oss-20b', '--served-model-name', 'openai/gpt-oss-20b', '--port', '8000', '--max-model-len', '32768', '--gpu-memory-utilization', '0.46']
     environment:
       HF_HUB_OFFLINE: '1' # belt-and-suspenders: a local path load shouldn't touch the network anyway
       HF_HUB_DISABLE_XET: '1'
