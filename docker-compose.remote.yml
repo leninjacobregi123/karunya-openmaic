@@ -233,6 +233,13 @@ services:
       # FA3 entirely), and this image (unlike :gptoss) doesn't have the sinks
       # dtype bug in its FlashInfer backend - see the image tag comment above.
       VLLM_ATTENTION_BACKEND: 'FLASHINFER'
+      # Weight loading OOM'd needing just ~70MB more than was free
+      # ("Tried to allocate 1.08 GiB... 1.01 GiB is free") on a GPU this
+      # tightly shared with image/tts - gpu-memory-utilization doesn't help
+      # here since it only governs the KV-cache pool reserved *after* weights
+      # finish loading. This is PyTorch's own suggested fix for allocator
+      # fragmentation right in the OOM message.
+      PYTORCH_CUDA_ALLOC_CONF: 'expandable_segments:True'
     # vLLM's docs suggest --ipc=host for shared memory between its worker
     # processes, but sharing the host's IPC namespace is exactly the kind of
     # privilege-escalation setting shared-host admin policies (e.g. an OPA
