@@ -75,10 +75,10 @@ if [ "$VLLM_MODE" = "external" ]; then
   PROFILE_ARGS=()
   echo "==> configured for external vLLM at ${EXTERNAL_VLLM_URL} (model: ${EXTERNAL_VLLM_MODEL})"
 else
-  set_env MAIC_VLLM_MODEL "openai/gpt-oss-20b"
+  set_env MAIC_VLLM_MODEL "Qwen/Qwen3-14B-AWQ"
   set_env MAIC_VLLM_BASE_URL "http://vllm:8000/v1"
   PROFILE_ARGS=(--profile local-vllm)
-  echo "==> configured for containerized vLLM (openai/gpt-oss-20b)"
+  echo "==> configured for containerized vLLM (Qwen/Qwen3-14B-AWQ)"
 fi
 
 # --- 4. build images -----------------------------------------------------------
@@ -94,7 +94,7 @@ echo "==> priming model caches (skips any model already cached)"
 ./prime-model-cache.sh sdxl
 ./prime-model-cache.sh voxcpm2
 if [ "$VLLM_MODE" = "local" ]; then
-  ./prime-model-cache.sh gptoss
+  ./prime-model-cache.sh qwen3-14b
 fi
 
 # --- 6. bring the stack up -----------------------------------------------------
