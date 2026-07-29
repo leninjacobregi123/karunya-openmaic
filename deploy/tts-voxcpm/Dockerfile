@@ -23,7 +23,7 @@ RUN pip install --no-cache-dir --retries 10 torch --index-url https://download.p
 # version torch pins doesn't have working kernels yet. Remove it; eager-mode
 # inference (what we actually use, PYTORCH_JIT=0 below) doesn't need it.
 RUN pip uninstall -y triton
-RUN pip install --no-cache-dir --retries 10 numpy soundfile fastapi uvicorn voxcpm
+RUN pip install --no-cache-dir --retries 10 numpy soundfile fastapi uvicorn voxcpm python-multipart
 RUN pip install --no-cache-dir --retries 10 --force-reinstall torchaudio --index-url https://download.pytorch.org/whl/cu128
 
 COPY server.py .

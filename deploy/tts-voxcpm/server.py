@@ -19,6 +19,16 @@ Returns: raw WAV bytes (Content-Type: audio/wav).
 The leading "(...)" in `input` is VoxCPM's inline voice-description syntax; we pass
 `input` through to the model as-is.
 
+Also implements the register-once/reference-by-id half of the vllm-omni voice
+contract (OpenMAIC's `lib/audio/voxcpm-registration.ts`):
+  GET  /v1/audio/voices                       -> {"voices": [<registered ids>]}
+  POST /v1/audio/voices  (multipart: name, consent, audio_sample)
+                                               -> {"voice": {"name": <id>}}
+A registered id can then be passed as `"voice"` on /v1/audio/speech instead of
+resending the reference clip on every call. Storage is in-process only (lost on
+restart); the client re-registers automatically when `voiceExists` comes back
+false, so that's a self-healing, not a correctness, gap.
+
 Run:
   PORT=8000 .venv/bin/python server.py
 """
@@ -50,7 +60,7 @@ for _fn, _arg in (
         getattr(torch._C, _fn)(_arg)
     except Exception:
         pass
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
 
@@ -66,6 +76,9 @@ app = FastAPI(title="VoxCPM2 TTS (OpenMAIC vllm-omni shim)")
 _model = None
 _sr = 16000
 _lock = threading.Lock()  # serialize inference (not guaranteed thread-safe)
+
+_voices_lock = threading.Lock()
+_registered_voices: dict[str, bytes] = {}  # voiceId -> reference WAV bytes
 
 
 def get_model():
@@ -124,6 +137,37 @@ def models():
     return {"object": "list", "data": [{"id": "voxcpm2", "object": "model"}]}
 
 
+@app.get("/v1/audio/voices")
+def list_voices():
+    with _voices_lock:
+        return {"object": "list", "voices": list(_registered_voices.keys())}
+
+
+@app.post("/v1/audio/voices")
+async def register_voice(
+    name: str = Form(...),
+    consent: str = Form(...),
+    audio_sample: UploadFile | None = None,
+):
+    if audio_sample is None:
+        raise HTTPException(status_code=400, detail="audio_sample is required")
+    data = await audio_sample.read()
+    with _voices_lock:
+        _registered_voices[name] = data
+    return {"voice": {"name": name}}
+
+
+def _registered_voice_wav_path(voice_id: str) -> str | None:
+    with _voices_lock:
+        data = _registered_voices.get(voice_id)
+    if data is None:
+        return None
+    path = f"/tmp/voxcpm_voice_{voice_id}.wav"
+    with open(path, "wb") as f:
+        f.write(data)
+    return path
+
+
 @app.post("/v1/audio/speech")
 def speech(req: SpeechRequest):
     text = (req.input or "").strip()
@@ -141,6 +185,11 @@ def speech(req: SpeechRequest):
         elif req.ref_audio:
             # Reference cloning: reference_wav_path alone.
             p = _decode_data_url_to_wav_path(req.ref_audio, "voxcpm_ref")
+            if p:
+                gen_kwargs["reference_wav_path"] = p
+        elif req.voice and req.voice != "default":
+            # Reference-by-id: look up a previously registered reference clip.
+            p = _registered_voice_wav_path(req.voice)
             if p:
                 gen_kwargs["reference_wav_path"] = p
     except Exception as e:
