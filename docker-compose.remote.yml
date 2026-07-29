@@ -220,12 +220,19 @@ services:
     # changes here is the model's weight footprint: Qwen3-14B-AWQ's int4 AWQ
     # quantization is ~9.99GiB total (2 safetensors shards) vs. gpt-oss-20b's
     # 13.7GiB, so the same 0.47/~14.74GiB budget that left gpt-oss only
-    # ~0.33GiB for KV cache instead leaves Qwen3-14B-AWQ roughly ~4.7-5GiB of
-    # real headroom - comfortably enough for the native 32768-token context
-    # below. If this GPU's other-service footprint grows,
-    # `nvidia-smi --query-gpu=memory.free --format=csv` and recompute against
-    # the formula above.
-    command: ['--model', '/root/.cache/huggingface/local-models/Qwen3-14B-AWQ', '--served-model-name', 'Qwen/Qwen3-14B-AWQ', '--port', '8000', '--max-model-len', '32768', '--gpu-memory-utilization', '0.47']
+    # ~0.33GiB for KV cache instead leaves Qwen3-14B-AWQ roughly ~4.89GiB.
+    # That's NOT quite enough for the native max-model-len of 32768: vLLM's
+    # own startup error reported "Available KV cache memory: 4.89 GiB" against
+    # a "5.00 GiB KV cache is needed" for 32768, with "the estimated maximum
+    # model length is 32016" - so 32768 doesn't fit. Rather than raising
+    # gpu-memory-utilization (0.48 already failed the preflight ceiling above
+    # during the gpt-oss tuning, and that ceiling is model-independent),
+    # max-model-len is capped at 30000: at ~152.6KiB/token (5.00GiB/32768),
+    # 30000 tokens needs ~4.58GiB, leaving ~0.3GiB of margin under the 4.89GiB
+    # available for run-to-run variance. If this GPU's other-service
+    # footprint changes, `nvidia-smi --query-gpu=memory.free --format=csv`
+    # and recompute against the formula above.
+    command: ['--model', '/root/.cache/huggingface/local-models/Qwen3-14B-AWQ', '--served-model-name', 'Qwen/Qwen3-14B-AWQ', '--port', '8000', '--max-model-len', '30000', '--gpu-memory-utilization', '0.47']
     environment:
       HF_HUB_OFFLINE: '1' # belt-and-suspenders: a local path load shouldn't touch the network anyway
       HF_HUB_DISABLE_XET: '1'
