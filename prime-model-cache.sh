@@ -12,6 +12,7 @@
 #   ./prime-model-cache.sh sdxl        # stabilityai/stable-diffusion-xl-base-1.0 -> image_cache
 #   ./prime-model-cache.sh voxcpm2     # openbmb/VoxCPM2 -> tts_cache
 #   ./prime-model-cache.sh gptoss      # openai/gpt-oss-20b -> vllm_cache (plain dir, not HF cache layout)
+#   ./prime-model-cache.sh qwen3-14b   # Qwen/Qwen3-14B-AWQ -> vllm_cache (plain dir, not HF cache layout)
 set -euo pipefail
 
 REPO="leninjacobregi123/karunya-openmaic"
@@ -40,8 +41,15 @@ case "$MODEL" in
     TARGET_DIR="/root/.cache/huggingface/local-models/gpt-oss-20b"
     MARKER="$TARGET_DIR/model.safetensors.index.json"
     ;;
+  qwen3-14b)
+    TAG="qwen3-14b-awq-model"
+    SERVICE="vllm"
+    LAYOUT="flat-dir"
+    TARGET_DIR="/root/.cache/huggingface/local-models/Qwen3-14B-AWQ"
+    MARKER="$TARGET_DIR/model.safetensors.index.json"
+    ;;
   *)
-    echo "Usage: $0 <sdxl|voxcpm2|gptoss>" >&2
+    echo "Usage: $0 <sdxl|voxcpm2|gptoss|qwen3-14b>" >&2
     exit 1
     ;;
 esac

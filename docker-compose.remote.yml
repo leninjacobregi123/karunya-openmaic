@@ -17,7 +17,7 @@
 #      MAIC_VLLM_BASE_URL in .env, e.g. http://192.168.x.x:8001/v1.
 #   2. Containerized vLLM (the `vllm` service below, profile `local-vllm`) -
 #      for machines where you can't install anything outside Docker, so vLLM
-#      itself has to run as a container too. Serves openai/gpt-oss-20b by
+#      itself has to run as a container too. Serves Qwen/Qwen3-14B-AWQ by
 #      default (sized for a single 32GB GPU). Enable with
 #      `--profile local-vllm` on the `up` command, and set
 #      MAIC_VLLM_BASE_URL=http://vllm:8000/v1 in .env to point the app at it.
@@ -167,7 +167,7 @@ services:
               capabilities: [gpu]
 
   # ---------------------------------------------------------------------------
-  # LLM — vLLM serving openai/gpt-oss-20b, containerized. Optional: only
+  # LLM — vLLM serving Qwen/Qwen3-14B-AWQ, containerized. Optional: only
   # starts with `docker compose --profile local-vllm up`, for machines that
   # can't install anything outside Docker (so vLLM itself has to run as a
   # container here too) and don't have GPU headroom for anything bigger.
@@ -183,25 +183,17 @@ services:
     # (`nvidia-smi`'s top-right "CUDA Version" field), which is a driver
     # upgrade you likely can't do on a host you don't control.
     #
-    # v0.10.1, NOT the original :gptoss launch-day tag. :gptoss
-    # (0.10.2.dev2+gf5635d62e, built 2025-08-05) has a real bug on Blackwell
-    # consumer cards (sm_120, e.g. RTX 5090): gpt-oss's attention-sinks
-    # feature asserts either FlashAttention 3 (impossible on Blackwell - FA3
-    # explicitly excludes compute capability >=10 entirely) or, via
-    # FlashInfer, a hard `assert sinks.dtype == torch.float32` that fails
-    # since the model keeps sinks in bf16 - vllm-project/vllm#22279. v0.10.1
-    # (released 2025-08-19, the fix for that exact issue) removes that
-    # assertion in vllm/v1/attention/backends/flashinfer.py, confirmed by
-    # inspecting both images' source directly. Still CUDA 12.8 (confirmed via
-    # `docker run --entrypoint python3 vllm/vllm-openai:v0.10.1 -c "import
-    # torch; print(torch.version.cuda)"` -> 12.8), so no driver problem.
-    # (Note: this version's TRT-LLM auto-routing for sinks requires compute
-    # capability *exactly* 100/SM100 i.e. datacenter Blackwell - sm_120
-    # consumer cards don't qualify, hence forcing FLASHINFER explicitly below
-    # rather than relying on that path.)
+    # v0.10.1 was originally pinned to dodge a gpt-oss-specific attention-sinks
+    # bug on Blackwell consumer cards (sm_120, e.g. RTX 5090) - see PR history
+    # for #26-#30. Qwen3-14B-AWQ doesn't use sinks at all, so that bug is moot
+    # here, but this tag stays pinned anyway: it's a known-working combination
+    # on this exact GPU/driver (CUDA 12.8, confirmed via `docker run
+    # --entrypoint python3 vllm/vllm-openai:v0.10.1 -c "import torch;
+    # print(torch.version.cuda)"` -> 12.8) and AWQ/Marlin-kernel support has
+    # already been exercised on it, so there's no reason to move off it.
     image: vllm/vllm-openai:v0.10.1
     profiles: ['local-vllm']
-    # Local filesystem path, NOT the bare repo id "openai/gpt-oss-20b": some
+    # Local filesystem path, NOT the bare repo id "Qwen/Qwen3-14B-AWQ": some
     # networks (e.g. a campus/lab proxy) intercept HF's storage CDN
     # (huggingface.co redirects AND the Xet path both land on domains this
     # kind of network MITMs with a self-signed cert - SSL_CERT_VERIFY_FAILED)
@@ -209,8 +201,8 @@ services:
     # with HF_HUB_DISABLE_XET set. A literal path bypasses the Hub client
     # entirely (pure local load, no network/variant/completeness resolution
     # at all) - same trick as _resolve_local() in deploy/image-sdxl/server.py.
-    # Primed via `./prime-model-cache.sh gptoss` into vllm_cache below - see
-    # that script for how the directory gets populated.
+    # Primed via `./prime-model-cache.sh qwen3-14b` into vllm_cache below -
+    # see that script for how the directory gets populated.
     # This GPU is shared with the image/tts services (they stay resident once
     # warmed, ~16GB combined observed on a 32GB card) - vLLM can't use its
     # default 90%-of-total/full-131072-context assumptions, which expect
@@ -218,42 +210,32 @@ services:
     #
     # gpu-memory-utilization is a fraction of *total* device memory reserved
     # for vLLM's entire footprint (weights + KV cache), not a fraction of
-    # free memory - so it has to be set high enough to at least cover the
-    # 13.7GiB the weights alone take once loaded. 0.42 and 0.35 were both
-    # too LOW for that (KV cache init failed with "No available memory for
-    # the cache blocks", i.e. negative KV budget - see PR #26 for why the
-    # raw weight-loading OOM those were chasing was actually an allocator
-    # fragmentation bug, fixed separately via PYTORCH_CUDA_ALLOC_CONF below).
-    # 0.48 (~15.06GiB) turned out too HIGH the other way: vLLM's own preflight
-    # check ("Free memory on device (14.89/31.37 GiB) on startup is less
-    # than desired GPU memory utilization") refuses to even start if the
-    # utilization*total budget exceeds real free memory at boot, and 15.06
-    # exceeded the observed 14.89GiB free with image/tts resident. The valid
-    # window here is genuinely narrow (~0.44-0.47): must clear 13.7GiB of
-    # weights but stay under ~14.9GiB real free. 0.46 (~14.43GiB) covers the
-    # weights and passes preflight, but "Available KV cache memory" came out
-    # to only ~0.02GiB - and confirmed via two separate runs (max-model-len
-    # 32768 and 4096 both reported the identical 0.02GiB) that this number is
-    # a function of gpu-memory-utilization ALONE, not max-model-len - it's
-    # (budget - peak process usage during weight load + torch.compile/
-    # cudagraph capture), computed before max-model-len is even considered.
-    # So lowering max-model-len alone can't fix an empty KV budget; only
-    # raising utilization can. Peak process usage backs out to ~14.41GiB
-    # (14.43 - 0.02), leaving genuine headroom up to the ~14.89GiB real-free
-    # ceiling - 0.47 (~14.74GiB budget) should yield ~0.33GiB available,
-    # comfortably above the ~0.14GiB max-model-len=4096 needs, while staying
-    # under the 0.48-that-failed-preflight line. If this GPU's other-service
-    # footprint grows, `nvidia-smi --query-gpu=memory.free --format=csv` and
-    # recompute - there may be no valid utilization value left if free drops
-    # much below ~14.5GiB.
-    command: ['--model', '/root/.cache/huggingface/local-models/gpt-oss-20b', '--served-model-name', 'openai/gpt-oss-20b', '--port', '8000', '--max-model-len', '4096', '--gpu-memory-utilization', '0.47']
+    # free memory. The 0.47 value (~14.74GiB of the 31.37GiB card) carries
+    # over unchanged from the gpt-oss-20b tuning in PR #26-#30: that work
+    # established the preflight ceiling is a hardware constant -
+    # `utilization * 31.37GiB <= real free (~14.89GiB with image/tts
+    # resident)` - independent of which model runs, and confirmed "Available
+    # KV cache memory" is a function of gpu-memory-utilization ALONE, not
+    # max-model-len (computed before max-model-len is even considered). What
+    # changes here is the model's weight footprint: Qwen3-14B-AWQ's int4 AWQ
+    # quantization is ~9.99GiB total (2 safetensors shards) vs. gpt-oss-20b's
+    # 13.7GiB, so the same 0.47/~14.74GiB budget that left gpt-oss only
+    # ~0.33GiB for KV cache instead leaves Qwen3-14B-AWQ roughly ~4.7-5GiB of
+    # real headroom - comfortably enough for the native 32768-token context
+    # below. If this GPU's other-service footprint grows,
+    # `nvidia-smi --query-gpu=memory.free --format=csv` and recompute against
+    # the formula above.
+    command: ['--model', '/root/.cache/huggingface/local-models/Qwen3-14B-AWQ', '--served-model-name', 'Qwen/Qwen3-14B-AWQ', '--port', '8000', '--max-model-len', '32768', '--gpu-memory-utilization', '0.47']
     environment:
       HF_HUB_OFFLINE: '1' # belt-and-suspenders: a local path load shouldn't touch the network anyway
       HF_HUB_DISABLE_XET: '1'
       # Force FlashInfer explicitly rather than relying on auto-detection:
       # FA3 is impossible on this GPU regardless (Blackwell is excluded from
-      # FA3 entirely), and this image (unlike :gptoss) doesn't have the sinks
-      # dtype bug in its FlashInfer backend - see the image tag comment above.
+      # FA3 entirely). Not required by a model-specific bug here (that was
+      # gpt-oss's sinks-dtype assertion, see PR #26-#30) - kept because it's
+      # already proven working on this exact hardware/vLLM-version combo,
+      # which removes one unknown rather than trusting auto-detection to land
+      # somewhere new and untested.
       VLLM_ATTENTION_BACKEND: 'FLASHINFER'
       # Weight loading OOM'd needing just ~70MB more than was free
       # ("Tried to allocate 1.08 GiB... 1.01 GiB is free") on a GPU this
@@ -270,7 +252,7 @@ services:
     # namespace and needs no elevated privilege.
     shm_size: '2gb'
     volumes:
-      - vllm_cache:/root/.cache/huggingface # persist the ~13GB model download across restarts
+      - vllm_cache:/root/.cache/huggingface # persist the ~10GB model download across restarts
     restart: unless-stopped
     networks: [maic-net]
     healthcheck:
@@ -341,7 +323,7 @@ services:
       - 'host.docker.internal:host-gateway'
     environment:
       NODE_ENV: production
-      # Bare model name vLLM serves - e.g. openai/gpt-oss-120b. Required (no
+      # Bare model name vLLM serves - e.g. Qwen/Qwen3-14B-AWQ. Required (no
       # default): guessing here would fail silently.
       #
       # IMPORTANT: DEFAULT_MODEL alone does NOT make the app actually use
