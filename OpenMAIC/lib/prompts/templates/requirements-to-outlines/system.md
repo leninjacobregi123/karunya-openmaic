@@ -135,9 +135,10 @@ Use `interactive` type when a concept benefits significantly from hands-on inter
 
 **Constraints**:
 
-- Limit to **1-2 interactive scenes per course** (they are resource-intensive)
+- **Hard limit: at most 1-2 interactive scenes in the ENTIRE course, of any widgetType combined** (simulation, diagram, code, game, visualization3d all count toward this same cap). Before adding another interactive scene, count how many the course already has; if it's already at 2, use a slide instead.
 - Interactive scenes **require** an `interactiveConfig` object
 - Do NOT use interactive for purely textual/conceptual content - use slides instead
+- A process/structure that just needs to be **shown and labeled** (no step-by-step reveal, no user-adjustable parameters, no clickable exploration) is a **static diagram**, not an interactive one - put it on a slide{{#if imageEnabled}} via `mediaGenerations` (`type: "image"`){{/if}}, not as `widgetType: "diagram"`. Reserve `widgetType: "diagram"` for cases where the interactivity itself (revealing stages, highlighting parts on demand, tracing cause-effect on user action) is essential to the learning goal - not merely because the content happens to be diagram-shaped
 - The `interactiveConfig.designIdea` should describe the specific interactive elements and user interactions
 
 ### Widget Type Selection for Interactive Scenes
@@ -149,10 +150,12 @@ When generating an interactive scene, you MUST select the appropriate widget typ
 | Concept Characteristics | Widget Type | widgetOutline Fields |
 |-------------------------|-------------|---------------------|
 | Physics/chemistry phenomena with adjustable parameters | `simulation` | `concept`, `keyVariables` |
-| Processes, workflows, cause-effect chains | `diagram` | `diagramType` |
+| Processes, workflows, cause-effect chains **that need step-by-step reveal or click-driven exploration** | `diagram` | `diagramType` |
 | Programming concepts, algorithms | `code` | `language` |
 | Practice activities, gamified assessment | `game` | `gameType`, `challenge` |
 | Biological/geometric structures, 3D models | `visualization3d` | `visualizationType`, `objects` |
+
+This table only applies once you've already decided the scene needs interactivity (and you're still under the 1-2-per-course cap above). A process/structure that just needs to be displayed and labeled - no reveal, no exploration, no adjustable parameters - is a static image on a slide, not a row in this table.
 
 **widgetOutline Format by Type:**
 
@@ -342,7 +345,7 @@ Rules:
 5. `quiz` scenes must include `quizConfig`.
 6. `interactive` scenes must include `widgetType` and `widgetOutline` (preferred). `interactiveConfig` is deprecated and only accepted for backwards compatibility.
 7. `pbl` scenes must include `pblConfig` with `projectTopic`, `projectDescription`, `targetSkills`, `issueCount`.
-8. Arrange scenes by inferred duration (typically 1-2 scenes per minute). Insert quizzes at appropriate points. Use interactive scenes sparingly (max 1-2 per course).
+8. Arrange scenes by inferred duration (typically 1-2 scenes per minute). Insert quizzes at appropriate points. **Interactive scenes are capped at 1-2 for the whole course, counting every widgetType together** - count your interactive scenes before adding another one.{{#if imageEnabled}} Static diagrams/processes that don't need interactivity belong on slides as a generated image (`mediaGenerations`, `type: "image"`), not as an interactive `widgetType: "diagram"`.{{/if}}
 9. **Language**: Infer from the user's requirement text and context. Output all scene content in the inferred language.
 10. Regardless of information completeness, always output conforming JSON - do not ask questions or request more information
 11. **No teacher identity on slides**: Scene titles and keyPoints must be neutral and topic-focused. Never include the teacher's name or role (e.g., avoid "Teacher Wang's Tips", "Teacher's Wishes"). Use generic labels like "Tips", "Summary", "Key Takeaways" instead.
