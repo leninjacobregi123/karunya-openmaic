@@ -75,10 +75,10 @@ if [ "$VLLM_MODE" = "external" ]; then
   PROFILE_ARGS=()
   echo "==> configured for external vLLM at ${EXTERNAL_VLLM_URL} (model: ${EXTERNAL_VLLM_MODEL})"
 else
-  set_env MAIC_VLLM_MODEL "Qwen/Qwen3-14B-AWQ"
+  set_env MAIC_VLLM_MODEL "Qwen/Qwen3-32B-AWQ"
   set_env MAIC_VLLM_BASE_URL "http://vllm:8000/v1"
   PROFILE_ARGS=(--profile local-vllm)
-  echo "==> configured for containerized vLLM (Qwen/Qwen3-14B-AWQ)"
+  echo "==> configured for containerized vLLM (Qwen/Qwen3-32B-AWQ)"
 fi
 
 # --- 4. build images -----------------------------------------------------------
@@ -94,7 +94,7 @@ echo "==> priming model caches (skips any model already cached)"
 ./prime-model-cache.sh sdxl
 ./prime-model-cache.sh voxcpm2
 if [ "$VLLM_MODE" = "local" ]; then
-  ./prime-model-cache.sh qwen3-14b
+  ./prime-model-cache.sh qwen3-32b
 fi
 
 # --- 6. bring the stack up -----------------------------------------------------
@@ -104,7 +104,15 @@ docker compose -f "$COMPOSE_FILE" "${PROFILE_ARGS[@]}" up -d
 echo
 echo "==> stack starting. Follow progress with:"
 if [ "$VLLM_MODE" = "local" ]; then
-  echo "      docker compose -f $COMPOSE_FILE logs -f vllm    # first boot downloads ~13GB"
+  echo "      docker compose -f $COMPOSE_FILE logs -f vllm    # first boot downloads ~18GB"
+  echo
+  echo "==> image/tts are NOT started by default - vllm is sized assuming it has the"
+  echo "    GPU to itself. Switch to media mode when you need image/TTS generation:"
+  echo "      docker compose -f $COMPOSE_FILE stop vllm"
+  echo "      docker compose -f $COMPOSE_FILE --profile media up -d image tts"
+  echo "    and back when you need the LLM's full context again:"
+  echo "      docker compose -f $COMPOSE_FILE stop image tts"
+  echo "      docker compose -f $COMPOSE_FILE --profile local-vllm up -d vllm"
 fi
 echo "      docker compose -f $COMPOSE_FILE logs -f app"
 echo

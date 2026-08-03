@@ -17,7 +17,7 @@
 #      MAIC_VLLM_BASE_URL in .env, e.g. http://192.168.x.x:8001/v1.
 #   2. Containerized vLLM (the `vllm` service below, profile `local-vllm`) -
 #      for machines where you can't install anything outside Docker, so vLLM
-#      itself has to run as a container too. Serves Qwen/Qwen3-14B-AWQ by
+#      itself has to run as a container too. Serves Qwen/Qwen3-32B-AWQ by
 #      default (sized for a single 32GB GPU). Enable with
 #      `--profile local-vllm` on the `up` command, and set
 #      MAIC_VLLM_BASE_URL=http://vllm:8000/v1 in .env to point the app at it.
@@ -109,12 +109,24 @@ services:
     networks: [maic-net]
 
   # ---------------------------------------------------------------------------
-  # local GPU models — TTS (VoxCPM2), image gen (SDXL). The LLM is external
-  # (host-run vLLM on :8001, see `app.extra_hosts` below) - not defined here.
+  # local GPU models — TTS (VoxCPM2), image gen (SDXL). Profile 'media', NOT
+  # started by a plain `docker compose up -d`: vllm below now runs a much
+  # bigger model (Qwen3-32B-AWQ, ~18GiB weights) that's sized assuming
+  # near-exclusive GPU access, and there isn't room left for SDXL (~10GiB) +
+  # VoxCPM2 (~6GiB) resident at the same time on this 32GiB card. Start them
+  # on demand when a course actually needs image/TTS generation:
+  #   docker compose -f docker-compose.remote.yml stop vllm
+  #   docker compose -f docker-compose.remote.yml --profile media up -d image tts
+  # and swap back when you need the LLM's full context/headroom again:
+  #   docker compose -f docker-compose.remote.yml stop image tts
+  #   docker compose -f docker-compose.remote.yml --profile local-vllm up -d vllm
+  # `docker stop` (not `down`/`rm`) so restarting is a fast warm start against
+  # the same cache volumes, not a rebuild.
   # ---------------------------------------------------------------------------
   tts:
     build:
       context: ./deploy/tts-voxcpm
+    profiles: ['media']
     restart: unless-stopped
     networks: [maic-net]
     environment:
@@ -146,6 +158,7 @@ services:
   image:
     build:
       context: ./deploy/image-sdxl
+    profiles: ['media']
     restart: unless-stopped
     networks: [maic-net]
     environment:
@@ -167,13 +180,25 @@ services:
               capabilities: [gpu]
 
   # ---------------------------------------------------------------------------
-  # LLM — vLLM serving Qwen/Qwen3-14B-AWQ, containerized. Optional: only
+  # LLM — vLLM serving Qwen/Qwen3-32B-AWQ, containerized. Optional: only
   # starts with `docker compose --profile local-vllm up`, for machines that
   # can't install anything outside Docker (so vLLM itself has to run as a
-  # container here too) and don't have GPU headroom for anything bigger.
-  # Machines pointing at vLLM running elsewhere (host-installed, or a
-  # different box - see MAIC_VLLM_BASE_URL below) skip this profile entirely
-  # and never build/run it.
+  # container here too). Machines pointing at vLLM running elsewhere
+  # (host-installed, or a different box - see MAIC_VLLM_BASE_URL below) skip
+  # this profile entirely and never build/run it.
+  #
+  # Sized assuming NEAR-EXCLUSIVE GPU access by default - the image/tts
+  # services above are profile-gated ('media') and NOT started alongside
+  # this by default; see the comment on the `tts` service for the on-demand
+  # toggle. This is a deliberate step up from the previous Qwen3-14B-AWQ
+  # setup (PR #31-#34), which stayed permanently squeezed to ~0.47
+  # utilization / ~4.89GiB KV budget specifically to coexist with
+  # always-resident image/tts. A genuinely bigger/more-capable model
+  # (32B dense vs 14B) does not fit in that squeeze at all - Qwen3-32B-AWQ's
+  # ~18GiB weights alone exceed the ~14.89GiB real-free ceiling image/tts
+  # left behind - so getting a bigger model means image/tts can no longer be
+  # always-on; they trade off against vLLM's footprint instead of sharing
+  # a slice of it.
   # ---------------------------------------------------------------------------
   vllm:
     # Pinned, NOT :latest. vLLM's :latest tag has moved to a CUDA>=13.0 base
@@ -185,15 +210,14 @@ services:
     #
     # v0.10.1 was originally pinned to dodge a gpt-oss-specific attention-sinks
     # bug on Blackwell consumer cards (sm_120, e.g. RTX 5090) - see PR history
-    # for #26-#30. Qwen3-14B-AWQ doesn't use sinks at all, so that bug is moot
-    # here, but this tag stays pinned anyway: it's a known-working combination
-    # on this exact GPU/driver (CUDA 12.8, confirmed via `docker run
-    # --entrypoint python3 vllm/vllm-openai:v0.10.1 -c "import torch;
-    # print(torch.version.cuda)"` -> 12.8) and AWQ/Marlin-kernel support has
-    # already been exercised on it, so there's no reason to move off it.
+    # for #26-#30. Neither gpt-oss nor Qwen3 sinks apply anymore, but this tag
+    # stays pinned: it's a known-working combination on this exact GPU/driver
+    # (CUDA 12.8, confirmed via `docker run --entrypoint python3
+    # vllm/vllm-openai:v0.10.1 -c "import torch; print(torch.version.cuda)"`
+    # -> 12.8) and AWQ/Marlin-kernel support has already been exercised on it.
     image: vllm/vllm-openai:v0.10.1
     profiles: ['local-vllm']
-    # Local filesystem path, NOT the bare repo id "Qwen/Qwen3-14B-AWQ": some
+    # Local filesystem path, NOT the bare repo id "Qwen/Qwen3-32B-AWQ": some
     # networks (e.g. a campus/lab proxy) intercept HF's storage CDN
     # (huggingface.co redirects AND the Xet path both land on domains this
     # kind of network MITMs with a self-signed cert - SSL_CERT_VERIFY_FAILED)
@@ -201,38 +225,28 @@ services:
     # with HF_HUB_DISABLE_XET set. A literal path bypasses the Hub client
     # entirely (pure local load, no network/variant/completeness resolution
     # at all) - same trick as _resolve_local() in deploy/image-sdxl/server.py.
-    # Primed via `./prime-model-cache.sh qwen3-14b` into vllm_cache below -
+    # Primed via `./prime-model-cache.sh qwen3-32b` into vllm_cache below -
     # see that script for how the directory gets populated.
-    # This GPU is shared with the image/tts services (they stay resident once
-    # warmed, ~16GB combined observed on a 32GB card) - vLLM can't use its
-    # default 90%-of-total/full-131072-context assumptions, which expect
-    # near-exclusive GPU access.
     #
     # gpu-memory-utilization is a fraction of *total* device memory reserved
     # for vLLM's entire footprint (weights + KV cache), not a fraction of
-    # free memory. The 0.47 value (~14.74GiB of the 31.37GiB card) carries
-    # over unchanged from the gpt-oss-20b tuning in PR #26-#30: that work
-    # established the preflight ceiling is a hardware constant -
-    # `utilization * 31.37GiB <= real free (~14.89GiB with image/tts
-    # resident)` - independent of which model runs, and confirmed "Available
-    # KV cache memory" is a function of gpu-memory-utilization ALONE, not
-    # max-model-len (computed before max-model-len is even considered). What
-    # changes here is the model's weight footprint: Qwen3-14B-AWQ's int4 AWQ
-    # quantization is ~9.99GiB total (2 safetensors shards) vs. gpt-oss-20b's
-    # 13.7GiB, so the same 0.47/~14.74GiB budget that left gpt-oss only
-    # ~0.33GiB for KV cache instead leaves Qwen3-14B-AWQ roughly ~4.89GiB.
-    # That's NOT quite enough for the native max-model-len of 32768: vLLM's
-    # own startup error reported "Available KV cache memory: 4.89 GiB" against
-    # a "5.00 GiB KV cache is needed" for 32768, with "the estimated maximum
-    # model length is 32016" - so 32768 doesn't fit. Rather than raising
-    # gpu-memory-utilization (0.48 already failed the preflight ceiling above
-    # during the gpt-oss tuning, and that ceiling is model-independent),
-    # max-model-len is capped at 30000: at ~152.6KiB/token (5.00GiB/32768),
-    # 30000 tokens needs ~4.58GiB, leaving ~0.3GiB of margin under the 4.89GiB
-    # available for run-to-run variance. If this GPU's other-service
-    # footprint changes, `nvidia-smi --query-gpu=memory.free --format=csv`
-    # and recompute against the formula above.
-    command: ['--model', '/root/.cache/huggingface/local-models/Qwen3-14B-AWQ', '--served-model-name', 'Qwen/Qwen3-14B-AWQ', '--port', '8000', '--max-model-len', '30000', '--gpu-memory-utilization', '0.47']
+    # free memory. With image/tts NOT resident, real free is ~31.94GiB
+    # (32607MiB total - ~669MiB Xorg/driver overhead, confirmed via
+    # `nvidia-smi` with only vllm loaded). 0.90 -> ~28.66GiB budget, a
+    # ~3.28GiB margin under that real-free ceiling (much safer than the
+    # ~0.15GiB margin the gpt-oss tuning in PR #26-#30 had to live with).
+    # Qwen3-32B-AWQ's weights are ~18.0GiB (4 safetensors shards,
+    # 19,325,481,744 bytes total), leaving ~10.66GiB for KV cache. Per-token
+    # KV size = 2(K+V) * 64 layers * 8 kv_heads * 128 head_dim * 2 bytes
+    # (fp16) = 256KiB/token (config.json: num_hidden_layers=64,
+    # num_key_value_heads=8, head_dim=128) - 10.66GiB / 256KiB/token ~=
+    # 43,664 tokens, comfortably above the model's native
+    # max_position_embeddings of 40960 (no rope_scaling/YaRN needed). If
+    # actual "Available KV cache memory" at boot comes in lower than this
+    # estimate (allocator overhead, block rounding), lower max-model-len to
+    # match - same empirical loop as PR #26-#34: read vLLM's own reported
+    # numbers and recompute, don't guess.
+    command: ['--model', '/root/.cache/huggingface/local-models/Qwen3-32B-AWQ', '--served-model-name', 'Qwen/Qwen3-32B-AWQ', '--port', '8000', '--max-model-len', '40960', '--gpu-memory-utilization', '0.90']
     environment:
       HF_HUB_OFFLINE: '1' # belt-and-suspenders: a local path load shouldn't touch the network anyway
       HF_HUB_DISABLE_XET: '1'
@@ -259,7 +273,7 @@ services:
     # namespace and needs no elevated privilege.
     shm_size: '2gb'
     volumes:
-      - vllm_cache:/root/.cache/huggingface # persist the ~10GB model download across restarts
+      - vllm_cache:/root/.cache/huggingface # persist the ~18GB model download across restarts
     restart: unless-stopped
     networks: [maic-net]
     healthcheck:
@@ -330,7 +344,7 @@ services:
       - 'host.docker.internal:host-gateway'
     environment:
       NODE_ENV: production
-      # Bare model name vLLM serves - e.g. Qwen/Qwen3-14B-AWQ. Required (no
+      # Bare model name vLLM serves - e.g. Qwen/Qwen3-32B-AWQ. Required (no
       # default): guessing here would fail silently.
       #
       # IMPORTANT: DEFAULT_MODEL alone does NOT make the app actually use
