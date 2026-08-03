@@ -11,8 +11,12 @@
 # Usage (run from the repo root, next to docker-compose.remote.yml):
 #   ./prime-model-cache.sh sdxl        # stabilityai/stable-diffusion-xl-base-1.0 -> image_cache
 #   ./prime-model-cache.sh voxcpm2     # openbmb/VoxCPM2 -> tts_cache
-#   ./prime-model-cache.sh gptoss      # openai/gpt-oss-20b -> vllm_cache (plain dir, not HF cache layout)
-#   ./prime-model-cache.sh qwen3-14b   # Qwen/Qwen3-14B-AWQ -> vllm_cache (plain dir, not HF cache layout)
+#   ./prime-model-cache.sh qwen3-32b   # Qwen/Qwen3-32B-AWQ -> vllm_cache (plain dir, not HF cache layout)
+#
+# image/tts are profile-gated ('media') and vllm is profile-gated
+# ('local-vllm') in docker-compose.remote.yml - this script passes the right
+# --profile itself so `docker compose run` can still resolve the service even
+# when that profile isn't otherwise active.
 set -euo pipefail
 
 REPO="leninjacobregi123/karunya-openmaic"
@@ -24,6 +28,7 @@ case "$MODEL" in
     TAG="sdxl-model"
     ARCHIVE="sdxl.tar.gz"
     SERVICE="image"
+    PROFILE="media"
     LAYOUT="hf-cache-tar"
     MARKER="/root/.cache/huggingface/hub/models--stabilityai--stable-diffusion-xl-base-1.0/snapshots"
     ;;
@@ -31,25 +36,20 @@ case "$MODEL" in
     TAG="voxcpm2-model"
     ARCHIVE="voxcpm2.tar.gz"
     SERVICE="tts"
+    PROFILE="media"
     LAYOUT="hf-cache-tar"
     MARKER="/root/.cache/huggingface/hub/models--openbmb--VoxCPM2/snapshots"
     ;;
-  gptoss)
-    TAG="gptoss20b-model"
+  qwen3-32b)
+    TAG="qwen3-32b-awq-model"
     SERVICE="vllm"
+    PROFILE="local-vllm"
     LAYOUT="flat-dir"
-    TARGET_DIR="/root/.cache/huggingface/local-models/gpt-oss-20b"
-    MARKER="$TARGET_DIR/model.safetensors.index.json"
-    ;;
-  qwen3-14b)
-    TAG="qwen3-14b-awq-model"
-    SERVICE="vllm"
-    LAYOUT="flat-dir"
-    TARGET_DIR="/root/.cache/huggingface/local-models/Qwen3-14B-AWQ"
+    TARGET_DIR="/root/.cache/huggingface/local-models/Qwen3-32B-AWQ"
     MARKER="$TARGET_DIR/model.safetensors.index.json"
     ;;
   *)
-    echo "Usage: $0 <sdxl|voxcpm2|gptoss|qwen3-14b>" >&2
+    echo "Usage: $0 <sdxl|voxcpm2|qwen3-32b>" >&2
     exit 1
     ;;
 esac
@@ -59,7 +59,7 @@ esac
 echo "==> priming '$SERVICE' cache from release '$TAG', entirely inside a container"
 
 if [ "$LAYOUT" = "hf-cache-tar" ]; then
-  docker compose -f "$COMPOSE_FILE" run --rm -T --no-deps \
+  docker compose -f "$COMPOSE_FILE" --profile "$PROFILE" run --rm -T --no-deps \
     -e MODEL_REPO="$REPO" -e MODEL_TAG="$TAG" -e MODEL_ARCHIVE="$ARCHIVE" -e CACHE_MARKER="$MARKER" \
     --entrypoint sh "$SERVICE" -s <<'INNER'
 set -e
@@ -97,14 +97,14 @@ du -sh /root/.cache/huggingface/hub/* 2>/dev/null
 INNER
 
 else
-  # flat-dir layout (gptoss): release assets are individual model files, with
-  # large ones split as "<filename>.part-XX" - no tar involved. Each original
+  # flat-dir layout: release assets are individual model files, with large
+  # ones split as "<filename>.part-XX" - no tar involved. Each original
   # filename is reassembled (if split) and placed directly into a plain
   # directory. vLLM's --model flag then points straight at that directory
   # (a filesystem path is a pure local load, same trick as the SDXL fix in
   # deploy/image-sdxl/server.py - it completely bypasses Hub API/network/
   # completeness-check logic, which is what actually breaks on this network).
-  docker compose -f "$COMPOSE_FILE" run --rm -T --no-deps \
+  docker compose -f "$COMPOSE_FILE" --profile "$PROFILE" run --rm -T --no-deps \
     -e MODEL_REPO="$REPO" -e MODEL_TAG="$TAG" -e TARGET_DIR="$TARGET_DIR" -e CACHE_MARKER="$MARKER" \
     --entrypoint sh "$SERVICE" -s <<'INNER'
 set -e
@@ -113,8 +113,8 @@ if [ -f "$CACHE_MARKER" ]; then
   exit 0
 fi
 
-mkdir -p /tmp/gptoss-dl "$TARGET_DIR"
-cd /tmp/gptoss-dl
+mkdir -p /tmp/vllm-dl "$TARGET_DIR"
+cd /tmp/vllm-dl
 API_URL="https://api.github.com/repos/${MODEL_REPO}/releases/tags/${MODEL_TAG}"
 echo "==> fetching release manifest: $API_URL"
 curl -fsSL "$API_URL" | grep -oP '"browser_download_url":\s*"\K[^"]+' > asset_urls.txt
@@ -146,7 +146,7 @@ for f in *; do
   esac
 done
 cd /
-rm -rf /tmp/gptoss-dl
+rm -rf /tmp/vllm-dl
 
 echo "==> done. Cache contents:"
 ls -la "$TARGET_DIR"
