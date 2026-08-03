@@ -77,7 +77,7 @@ curl -fsSL "$API_URL" | grep -oP '"browser_download_url":\s*"\K[^"]+' > asset_ur
 while read -r url; do
   fname=$(basename "$url")
   echo "    downloading $fname"
-  curl -fSL "$url" -o "$fname"
+  curl -fSL -C - --retry 5 --retry-delay 5 --retry-all-errors "$url" -o "$fname"
 done < asset_urls.txt
 
 echo "==> verifying all parts landed"
@@ -123,7 +123,7 @@ curl -fsSL "$API_URL" | grep -oP '"browser_download_url":\s*"\K[^"]+' > asset_ur
 while read -r url; do
   fname=$(basename "$url")
   echo "    downloading $fname"
-  curl -fSL "$url" -o "$fname"
+  curl -fSL -C - --retry 5 --retry-delay 5 --retry-all-errors "$url" -o "$fname"
 done < asset_urls.txt
 rm -f asset_urls.txt
 
