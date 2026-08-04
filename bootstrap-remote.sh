@@ -28,14 +28,26 @@ if [ "${1:-}" = "--external-vllm" ]; then
 fi
 
 # --- 1. get the repo -----------------------------------------------------------
-if [ -d "$REPO_DIR/.git" ]; then
+# If this script is already running from inside a checkout (the common re-run
+# pattern: `cd karunya-openmaic && git pull && ./bootstrap-remote.sh`), operate
+# in place instead of cloning a second, nested copy. A nested clone shares
+# this directory's basename ("karunya-openmaic"), so Docker Compose's default
+# project-name-from-directory-basename would point it at the SAME persisted
+# volumes (Postgres, etc.) as this checkout, while generating a brand-new
+# random .env - a guaranteed secret mismatch against data that volume already
+# has baked in.
+if [ -f "$COMPOSE_FILE" ] && [ -d .git ]; then
+  echo "==> already inside a checkout ($(pwd)), pulling latest in place"
+  git pull
+elif [ -d "$REPO_DIR/.git" ]; then
   echo "==> $REPO_DIR already exists, pulling latest"
   git -C "$REPO_DIR" pull
+  cd "$REPO_DIR"
 else
   echo "==> cloning $REPO_URL"
   git clone "$REPO_URL" "$REPO_DIR"
+  cd "$REPO_DIR"
 fi
-cd "$REPO_DIR"
 
 # --- 2. sanity-check prerequisites --------------------------------------------
 command -v docker >/dev/null 2>&1 || { echo "docker not found - install Docker first" >&2; exit 1; }
