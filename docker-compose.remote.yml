@@ -1,8 +1,9 @@
 # Fully self-contained GPU stack for a REMOTE deployment.
 #
-# Unlike docker-compose.dev.yml (host networking, reuses host node_modules,
-# expects a host-installed Ollama), this file assumes NOTHING about the host
-# except Docker + the NVIDIA Container Toolkit. Postgres, Redis, MinIO, TTS
+# This file assumes NOTHING about the host except Docker + the NVIDIA
+# Container Toolkit - this is the only deploy path now (an earlier
+# docker-compose.dev.yml, which assumed host networking/node_modules/a
+# host-installed Ollama, was removed as obsolete). Postgres, Redis, MinIO, TTS
 # (VoxCPM2), and image gen (SDXL) each run as their own container on a
 # private compose network, addressed by service name. There is exactly ONE
 # unavoidable host-level prerequisite: an NVIDIA driver + the

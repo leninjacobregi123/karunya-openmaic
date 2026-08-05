@@ -71,21 +71,30 @@ Evals are a **separate** vitest config (`vitest.eval.config.ts`, files `tests/**
 
 This repo is being customized into a **multi-user LMS for Karunya University** (full design: `docs/karunya-architecture.md`). Upstream OpenMAIC is single-user/browser-local; we layered a multi-tenant platform on top. **Status: Phases 0–5 implemented & validated in dev** on a single GB10 box; only real-cluster deploy + AD/LDAP wiring remain. The platform additions live in new modules so upstream merges stay clean.
 
-### Run the full dev stack (this GB10 box)
+### Run the stack (shannon only — never run the app itself locally)
+
+OpenMAIC only ever runs on shannon, fully containerized via `docker-compose.remote.yml`.
+Never start the dev server, e2e tests, or any other live instance of the app on this
+machine — only static checks that don't run the app (`./init.sh`, `pnpm build`) belong
+here. On shannon:
 
 ```bash
-# 1. local model servers on the host GPU
-deploy/tts-voxcpm/start.sh        # VoxCPM2 TTS    :8000
-deploy/image-sdxl/start.sh        # SDXL images    :8001
-#    LLM = host Ollama :11434 (models incl qwen3.6:35b); see deploy/*/README.md
-# 2. app + Postgres/Redis/MinIO (from workspace root)
-docker compose -f docker-compose.dev.yml up -d     # app on http://localhost:3000
+./bootstrap-remote.sh   # clone/pull, .env, build images, prime model caches, bring up
 ```
 
-- Dev container uses **host networking** and **reuses host `node_modules`** — if deps change, run `./init.sh` then `docker compose -f docker-compose.dev.yml restart openmaic-dev`.
-- DB: `cd OpenMAIC && DATABASE_URL=postgresql://maic:maic_dev_pw@localhost:5433/maic pnpm exec drizzle-kit migrate`; seed dev users: `pnpm tsx lib/db/seed.ts`.
+This brings up `postgres redis minio minio-init migrate app` plus `vllm` (containerized
+LLM, profile `local-vllm`) by default. `image`/`tts` are profile-gated (`media`) since
+a large resident LLM and both media services can be tight on a single GPU — bring them
+up alongside `vllm` explicitly once the combination has been tuned to fit:
+
+```bash
+docker compose -f docker-compose.remote.yml --profile local-vllm --profile media up -d
+```
+
+- DB: `cd OpenMAIC && DATABASE_URL=<from .env> pnpm exec drizzle-kit migrate`; seed dev users: `pnpm tsx lib/db/seed.ts`.
 - Dev logins: `admin@karunya.edu / teacher123` (teacher), `student1@karunya.edu / student123` (student).
 - GB10 (Blackwell sm_121) quirk: the model servers run with `PYTORCH_JIT=0` (cu128 nvrtc rejects sm_121 for JIT-fused kernels) — see `deploy/*/README.md`.
+- `deploy/tts-voxcpm/start.sh` / `deploy/image-sdxl/start.sh` are a standalone, non-Docker way to iterate on an individual model server directly on a GPU host — not part of the normal deploy flow above.
 
 ### Platform layer (added on top of upstream)
 
@@ -96,7 +105,7 @@ docker compose -f docker-compose.dev.yml up -d     # app on http://localhost:300
 - **Teacher dashboard** — `app/teacher/` (publish, cohort/roster, assign, per-student progress + transcripts).
 - **Stateless-scaling infra** — `lib/server/redis.ts` (job store is Redis-backed), `lib/server/s3.ts` (media uploaded to MinIO on generation, served MinIO-first). These make the web tier safe for `web.replicas > 1`.
 
-### New env (set by `docker-compose.dev.yml`)
+### New env (set by `docker-compose.remote.yml` / `.env.remote.example`)
 
 `DATABASE_URL`, `REDIS_URL`, `SESSION_SECRET`, `AUTH_MODE` (`dev`|`ldap`), `S3_ENDPOINT`/`S3_ACCESS_KEY`/`S3_SECRET_KEY`/`S3_BUCKET`, `PARALLEL_SCENE_CONCURRENCY`, and local-model endpoints `DEFAULT_MODEL`/`OLLAMA_BASE_URL`, `TTS_VOXCPM_BASE_URL`, `IMAGE_LEMONADE_BASE_URL`.
 

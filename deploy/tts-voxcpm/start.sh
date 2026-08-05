@@ -1,7 +1,8 @@
 #!/bin/bash
-# Start the local VoxCPM2 TTS server (dev) on the GB10 host.
-# OpenMAIC (dev container, host networking) reaches it at http://localhost:8000/v1
-# and is configured via TTS_VOXCPM_BASE_URL in docker-compose.dev.yml.
+# Start the local VoxCPM2 TTS server (dev) on the GB10 host, as a standalone
+# host process outside Docker. The actual deployed path containerizes this same
+# server.py via the sibling Dockerfile + the `tts` service in
+# docker-compose.remote.yml - see README.md for details.
 #
 #   ./start.sh          # launch detached, logs -> server.log
 #   tail -f server.log  # watch

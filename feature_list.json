@@ -62,8 +62,8 @@
       "name": "Phase 0 — Infra & local models",
       "description": "Stand up vLLM (70B text) + VoxCPM2 (TTS) + SDXL/Flux (image) on GPU nodes; Postgres + Redis + MinIO; containerize OpenMAIC for K8s; point providers at local models via server-providers.yml (server-configured, keys hidden from client). EXIT CRITERION: a teacher can generate a slides+TTS course end-to-end on local LLMs with acceptable quality.",
       "dependencies": ["feat-005"],
-      "status": "not-started",
-      "evidence": ""
+      "status": "in-progress",
+      "evidence": "2026-08-05 (shannon, containerized - not gated on feat-005's real-cluster specifics, all done via docker-compose.remote.yml on a single GPU box): vLLM serving Qwen/Qwen3-32B-AWQ, VoxCPM2 TTS, and SDXL image-gen all containerized (docker-compose.remote.yml). vllm+tts resident together confirmed via a real user course generation, full and correct end-to-end. NOT YET DONE: image resident alongside vllm+tts under real active-generation load (current vllm gpu-memory-utilization=0.72/max-model-len=15000 is a prediction, not empirically confirmed at this exact tuning - see session-handoff.md). See progress.md's 2026-08-05 dated entry for full history (model swaps, TTS/image bugfixes, PRs #31-#40)."
     },
     {
       "id": "feat-020",

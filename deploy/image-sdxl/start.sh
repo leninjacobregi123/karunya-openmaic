@@ -1,7 +1,8 @@
 #!/bin/bash
-# Start the local SDXL image server (dev) on the GB10 host.
-# OpenMAIC (dev container, host networking) reaches it at http://localhost:8001/v1
-# via IMAGE_LEMONADE_BASE_URL in docker-compose.dev.yml (keyless server-managed provider).
+# Start the local SDXL image server (dev) on the GB10 host, as a standalone
+# host process outside Docker. The actual deployed path containerizes this same
+# server.py via the sibling Dockerfile + the `image` service in
+# docker-compose.remote.yml - see README.md for details.
 #
 #   ./start.sh / ./stop.sh ; tail -f server.log
 set -e
