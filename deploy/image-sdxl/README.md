@@ -14,10 +14,14 @@ curl localhost:8001/health
 ./stop.sh
 ```
 
-OpenMAIC is wired via `IMAGE_LEMONADE_BASE_URL=http://localhost:8001/v1` in
-`docker-compose.dev.yml`. Because `lemonade` is keyless and we do **not** set
-`IMAGE_OPENAI_API_KEY`, it becomes the server-managed default image provider for
-classroom generation.
+This host-process path is a standalone alternative for iterating on the server
+outside Docker. The actual deployed path containerizes this same `server.py` via
+the sibling `Dockerfile` and runs it as the `image` service in
+`docker-compose.remote.yml` (gated behind the `media` Compose profile, with
+`IMAGE_LOW_VRAM=1` set to let it coexist with a large resident LLM — see
+`CLAUDE.md`'s Karunya customization section for the current bring-up flow).
+Because `lemonade` is keyless and we do **not** set `IMAGE_OPENAI_API_KEY`, it
+becomes the server-managed default image provider for classroom generation.
 
 ## Reproduce the env
 
@@ -42,4 +46,6 @@ OpenMAIC requests ≤1024px (16:9 → 1024×576, 4:3 → 1024×768, 1:1 → 1024
 - `PYTORCH_JIT=0` set defensively (same GB10/sm_121 + cu128 nvrtc caveat as the TTS server).
 - ~37s per 1024×576 image (30 steps) incl. first-run warmup; faster afterwards. For lower latency consider SDXL-Turbo / fewer steps.
 - Validated: direct generation (valid PNG) + as OpenMAIC's server-managed image provider.
-- For K8s this gets containerized (Phase 0); revisit the JIT/arch caveat for the target GPUs.
+- Now also containerized (see `Dockerfile` + the `image` service in
+  `docker-compose.remote.yml`) — this `start.sh`/`stop.sh` host-process path remains
+  as a standalone option for iterating without Docker.

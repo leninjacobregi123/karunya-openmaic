@@ -14,8 +14,11 @@ curl localhost:8000/health
 ./stop.sh             # stop
 ```
 
-OpenMAIC is wired via `TTS_VOXCPM_BASE_URL=http://localhost:8000/v1` in
-`docker-compose.dev.yml` (server-managed provider → keys/URL hidden from clients).
+This host-process path is a standalone alternative for iterating on the server
+outside Docker. The actual deployed path containerizes this same `server.py` via
+the sibling `Dockerfile` and runs it as the `tts` service in
+`docker-compose.remote.yml` (gated behind the `media` Compose profile - see
+`CLAUDE.md`'s Karunya customization section for the current bring-up flow).
 
 ## How it was set up (reproduce)
 
@@ -51,5 +54,7 @@ are `data:` URLs for voice cloning. Also exposes `GET /health` and `GET /v1/mode
   persona → voice prompt. For the **publish-immutable** architecture we still need
   **server-side pre-generation** at publish time (OpenMAIC currently *skips* server-side TTS
   when the voice is `voxcpm:auto` — needs a small change to pass agent voiceDesign).
-- This dev server is a host process. For K8s it gets containerized (Phase 0) — revisit the
-  cu128/sm_121 JIT workaround for the target cluster's GPUs/toolkit.
+- Now also containerized (see `Dockerfile` + the `tts` service in
+  `docker-compose.remote.yml`) — this `start.sh`/`stop.sh` host-process path remains
+  as a standalone option for iterating without Docker. The cu128/sm_121 JIT
+  workaround (`PYTORCH_JIT=0`) applies identically in both.

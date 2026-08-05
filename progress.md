@@ -2,8 +2,8 @@
 
 ## Current State
 
-**Last Updated:** 2026-06-16
-**Active Feature:** feat-060 — Phase 5 scale-hardening: load test + K8s manifests + MULTI-REPLICA CODE HARDENING DONE (playback stateless: content from Postgres, media from MinIO, job state in Redis). REMAINING = ops only (build/push prod image + cluster deploy, gated on feat-005). Phases 0-4 complete in dev.
+**Last Updated:** 2026-08-05
+**Active Feature:** feat-010 — Phase 0 infra/local-models hardening on shannon (containerized vLLM + TTS/image serving, see the dated entry near the end of this log). feat-060 — Phase 5 scale-hardening remains REMAINING = ops only (build/push prod image + cluster deploy, gated on feat-005). Phases 1-4 complete in dev.
 **Project:** Customize OpenMAIC into a multi-user LMS for Karunya University — see `docs/karunya-architecture.md`.
 **Stack decisions:** custom sessions (pluggable AuthProvider: dev now, LDAP/AD later) + Drizzle ORM + Postgres/Redis/MinIO. Not Auth.js/Prisma.
 
@@ -13,7 +13,7 @@
 
 - [x] Harness scaffolded at workspace root (CLAUDE.md, init.sh, feature_list.json, progress.md, session-handoff.md)
 - [x] feat-000 — Baseline green: `./init.sh` passed clean
-- [x] Read both research papers (papers/) → memory `maic-research-foundation`
+- [x] Read both research papers (`docs/papers/`, moved from root `papers/` in a later cleanup pass) → memory `maic-research-foundation`
 - [x] Full codebase read across 6 dimensions (auth, persistence, course lifecycle, LLM providers, features, deployment)
 - [x] feat-001 — Architecture design doc `docs/karunya-architecture.md` v1
 - [x] Project decisions captured → memory `karunya-deployment-project`; phased plan loaded into feature_list.json (feat-010..060)
@@ -121,3 +121,55 @@ All chosen beta features now work locally: slides + SDXL images + quiz (generati
 ## Notes for Next Session
 
 Verification gates and architecture map live in `CLAUDE.md`. Heavy gates (`pnpm build`, `pnpm test:e2e`) are intentionally out of the fast `./init.sh` loop — run them only when your change touches the build or e2e flows.
+
+## Session Update — 2026-08-05: local model serving on shannon (feat-010)
+
+Real deployment/ops work against the exit criterion for feat-010 ("a teacher can
+generate a slides+TTS course end-to-end on local LLMs with acceptable quality"),
+carried out on shannon (the one machine this app runs on — never locally).
+
+- **Model swap, twice:** `openai/gpt-oss-20b` → `Qwen/Qwen3-14B-AWQ` (didn't have
+  enough capability for the full agentic course-generation flow) →
+  `Qwen/Qwen3-32B-AWQ` (current). Each swap: weights packaged as a GitHub Release
+  (`qwen3-32b-awq-model`, split into <2GB parts, reassembled by
+  `prime-model-cache.sh`), `docker-compose.remote.yml`'s `vllm` service retuned via
+  vLLM's own reported "Available KV cache memory" at boot — never guessed.
+- **Two real bugs fixed, unrelated to the model:**
+  - VoxCPM TTS voice-registration was 404ing — `deploy/tts-voxcpm/server.py` never
+    actually implemented `POST/GET /v1/audio/voices` despite its docstring claiming
+    to (PR #33).
+  - Image generation was silently producing zero images across real course
+    generations — root cause was prompt ambiguity in
+    `OpenMAIC/lib/prompts/templates/requirements-to-outlines/system.md` (the model
+    consistently picked the interactive-widget path over static-image generation
+    for diagram-shaped concepts), not a code/config bug (PR #34).
+- **On-demand media Compose profile, then reverted to always-resident:** initially
+  gated `image`/`tts` behind a new `media` Compose profile so a large resident LLM
+  could claim near-exclusive GPU access (PRs #35-#36). Discovered the real
+  course-generation flow (`use-scene-generator.ts`) interleaves LLM and media/TTS
+  calls throughout a job — there's no clean phase boundary, so the toggle could
+  never actually be exercised mid-generation. Retuned instead for all three
+  services resident together: `IMAGE_LOW_VRAM=1` forces SDXL's existing
+  sequential-CPU-offload path (built for a 4GB card, previously dead code on this
+  32GB card) to shrink its footprint (PR #39); `vllm`'s
+  `gpu-memory-utilization`/`max-model-len` retuned down to fit alongside tts+image
+  (PR #40, currently 0.72/15000, not yet empirically confirmed at this exact
+  tuning — see `feature_list.json` feat-010 evidence).
+- **Confirmed working:** vllm+tts resident together produced a full, correct course
+  generation end-to-end (real user test). image's real VRAM footprint under active
+  generation (not just idle) and the full vllm+tts+image combination are still
+  pending final validation.
+- **Infra bugs found and fixed along the way:** `prime-model-cache.sh` had no
+  retry/resume on its per-file downloads (PR #37 — a single transient connection
+  reset killed an entire ~18GB prime); `bootstrap-remote.sh` cloned a nested,
+  duplicate checkout when re-run from inside an existing one, which shared a
+  Postgres data volume with a mismatched freshly-generated password (PR #38).
+- **Repo cleanup:** removed the obsolete non-Docker local dev-stack path
+  (`start.sh`, `docker-compose.dev.yml`, `Dockerfile.dev` at the workspace root —
+  superseded by the containerized `bootstrap-remote.sh`/`docker-compose.remote.yml`
+  flow), dead/corrupt scratch files, moved `papers/` under `docs/`, added a
+  root-level `README.md`.
+
+**Next:** finish validating image-gen under real load alongside vllm+tts (retune
+`gpu-memory-utilization`/`max-model-len` again if needed, same empirical loop as
+every step above), then this feature's exit criterion is fully met.
