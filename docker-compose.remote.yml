@@ -237,28 +237,49 @@ services:
     #
     # gpu-memory-utilization is a fraction of *total* device memory reserved
     # for vLLM's entire footprint (weights + KV cache), not a fraction of
-    # free memory. With image/tts NOT resident and the GPU otherwise idle,
-    # real free is ~31.35GiB (32105MiB, confirmed via `nvidia-smi` on
-    # shannon with only vllm loaded). 0.90 -> ~28.22GiB budget, comfortably
-    # under that ceiling. Qwen3-32B-AWQ's weights load at 18.0083GiB
-    # (confirmed via vLLM's own "Model loading took 18.0083 GiB" boot log,
-    # matching the ~18.0GiB estimate from the 4 safetensors shards).
+    # free memory.
+    #
+    # The real course-generation flow (use-scene-generator.ts) interleaves
+    # LLM and image/TTS calls throughout a job - there is no clean phase
+    # boundary where the `media` profile could safely be toggled mid-
+    # generation (see PR history around the media-profile experiment). So
+    # this is now tuned for tts+image resident ALONGSIDE vllm, not for
+    # near-exclusive access. tts alone (VoxCPM2) costs ~6.17GiB (confirmed:
+    # real free dropped from ~31.35GiB idle to 25.18GiB with only tts
+    # loaded and image idle-but-warm under IMAGE_LOW_VRAM=1's sequential-
+    # CPU-offload mode). 0.72 -> ~22.59GiB budget, leaving ~2.6GiB margin
+    # under that 25.18GiB ceiling for whatever image adds when it's
+    # actively generating (not yet measured under real load - if a real
+    # image-generation request while vllm+tts are also up pushes free
+    # memory below this margin, lower utilization further).
+    #
+    # Qwen3-32B-AWQ's weights load at 18.0083GiB (confirmed via vLLM's own
+    # "Model loading took 18.0083 GiB" boot log, matching the ~18.0GiB
+    # estimate from the 4 safetensors shards).
     #
     # Per-token KV size = 2(K+V) * 64 layers * 8 kv_heads * 128 head_dim *
     # 2 bytes (fp16) = 256KiB/token (config.json: num_hidden_layers=64,
     # num_key_value_heads=8, head_dim=128) - confirmed exactly by vLLM's own
     # boot log ("10.00 GiB KV cache is needed" for 40960 tokens = precisely
-    # 256KiB/token). What the napkin math got wrong was the *available*
-    # budget: 28.22GiB - 18.0083GiB weights = ~10.21GiB predicted for KV
-    # cache, but vLLM actually reported "Available KV cache memory: 9.66
-    # GiB" - the ~0.55GiB gap is torch.compile/CUDA-graph capture overhead
-    # that isn't part of the weights themselves. At 9.66GiB, vLLM's own
-    # "estimated maximum model length is 39584" - max-model-len is capped at
-    # 38000 (~1.5k token / ~4% margin under that estimate) for headroom
-    # against run-to-run allocator variance, same pattern as the Qwen3-14B-
-    # AWQ tuning in PR #31-#34. If this GPU's other-load footprint changes,
-    # re-run and recompute from vLLM's own reported numbers - don't guess.
-    command: ['--model', '/root/.cache/huggingface/local-models/Qwen3-32B-AWQ', '--served-model-name', 'Qwen/Qwen3-32B-AWQ', '--port', '8000', '--max-model-len', '38000', '--gpu-memory-utilization', '0.90']
+    # 256KiB/token). The ~0.55GiB gap seen between predicted and reported
+    # "Available KV cache memory" at the old 0.90/near-exclusive tuning was
+    # torch.compile/CUDA-graph capture overhead that isn't part of the
+    # weights themselves - applying that same ~0.55GiB here against the new
+    # 0.72/tts-resident budget: 22.59GiB - 18.0083GiB weights - ~0.55GiB
+    # overhead ~= 4.03GiB predicted for KV cache -> ~16,124 tokens
+    # (4.03GiB / 256KiB/token). max-model-len set to 15000 as a starting
+    # point below that prediction - THIS IS NOT YET EMPIRICALLY CONFIRMED
+    # at this tts+image-resident tuning (unlike the 38000 value at the old
+    # near-exclusive tuning, which vLLM's own boot log did confirm). Read
+    # the real "Available KV cache memory" / "estimated maximum model
+    # length" from vLLM's boot log on the next deploy and correct this
+    # value to match - don't trust this prediction over vLLM's own numbers.
+    # Also not yet measured: image's actual VRAM usage while SDXL is
+    # actively generating (IMAGE_LOW_VRAM=1's sequential-offload mode was
+    # only observed idle-but-warm so far) - if a real image-generation
+    # request while vllm+tts are also resident pushes free memory below
+    # this margin, gpu-memory-utilization needs to come down further.
+    command: ['--model', '/root/.cache/huggingface/local-models/Qwen3-32B-AWQ', '--served-model-name', 'Qwen/Qwen3-32B-AWQ', '--port', '8000', '--max-model-len', '15000', '--gpu-memory-utilization', '0.72']
     environment:
       HF_HUB_OFFLINE: '1' # belt-and-suspenders: a local path load shouldn't touch the network anyway
       HF_HUB_DISABLE_XET: '1'
