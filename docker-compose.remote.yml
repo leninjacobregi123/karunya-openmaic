@@ -230,23 +230,28 @@ services:
     #
     # gpu-memory-utilization is a fraction of *total* device memory reserved
     # for vLLM's entire footprint (weights + KV cache), not a fraction of
-    # free memory. With image/tts NOT resident, real free is ~31.94GiB
-    # (32607MiB total - ~669MiB Xorg/driver overhead, confirmed via
-    # `nvidia-smi` with only vllm loaded). 0.90 -> ~28.66GiB budget, a
-    # ~3.28GiB margin under that real-free ceiling (much safer than the
-    # ~0.15GiB margin the gpt-oss tuning in PR #26-#30 had to live with).
-    # Qwen3-32B-AWQ's weights are ~18.0GiB (4 safetensors shards,
-    # 19,325,481,744 bytes total), leaving ~10.66GiB for KV cache. Per-token
-    # KV size = 2(K+V) * 64 layers * 8 kv_heads * 128 head_dim * 2 bytes
-    # (fp16) = 256KiB/token (config.json: num_hidden_layers=64,
-    # num_key_value_heads=8, head_dim=128) - 10.66GiB / 256KiB/token ~=
-    # 43,664 tokens, comfortably above the model's native
-    # max_position_embeddings of 40960 (no rope_scaling/YaRN needed). If
-    # actual "Available KV cache memory" at boot comes in lower than this
-    # estimate (allocator overhead, block rounding), lower max-model-len to
-    # match - same empirical loop as PR #26-#34: read vLLM's own reported
-    # numbers and recompute, don't guess.
-    command: ['--model', '/root/.cache/huggingface/local-models/Qwen3-32B-AWQ', '--served-model-name', 'Qwen/Qwen3-32B-AWQ', '--port', '8000', '--max-model-len', '40960', '--gpu-memory-utilization', '0.90']
+    # free memory. With image/tts NOT resident and the GPU otherwise idle,
+    # real free is ~31.35GiB (32105MiB, confirmed via `nvidia-smi` on
+    # shannon with only vllm loaded). 0.90 -> ~28.22GiB budget, comfortably
+    # under that ceiling. Qwen3-32B-AWQ's weights load at 18.0083GiB
+    # (confirmed via vLLM's own "Model loading took 18.0083 GiB" boot log,
+    # matching the ~18.0GiB estimate from the 4 safetensors shards).
+    #
+    # Per-token KV size = 2(K+V) * 64 layers * 8 kv_heads * 128 head_dim *
+    # 2 bytes (fp16) = 256KiB/token (config.json: num_hidden_layers=64,
+    # num_key_value_heads=8, head_dim=128) - confirmed exactly by vLLM's own
+    # boot log ("10.00 GiB KV cache is needed" for 40960 tokens = precisely
+    # 256KiB/token). What the napkin math got wrong was the *available*
+    # budget: 28.22GiB - 18.0083GiB weights = ~10.21GiB predicted for KV
+    # cache, but vLLM actually reported "Available KV cache memory: 9.66
+    # GiB" - the ~0.55GiB gap is torch.compile/CUDA-graph capture overhead
+    # that isn't part of the weights themselves. At 9.66GiB, vLLM's own
+    # "estimated maximum model length is 39584" - max-model-len is capped at
+    # 38000 (~1.5k token / ~4% margin under that estimate) for headroom
+    # against run-to-run allocator variance, same pattern as the Qwen3-14B-
+    # AWQ tuning in PR #31-#34. If this GPU's other-load footprint changes,
+    # re-run and recompute from vLLM's own reported numbers - don't guess.
+    command: ['--model', '/root/.cache/huggingface/local-models/Qwen3-32B-AWQ', '--served-model-name', 'Qwen/Qwen3-32B-AWQ', '--port', '8000', '--max-model-len', '38000', '--gpu-memory-utilization', '0.90']
     environment:
       HF_HUB_OFFLINE: '1' # belt-and-suspenders: a local path load shouldn't touch the network anyway
       HF_HUB_DISABLE_XET: '1'
