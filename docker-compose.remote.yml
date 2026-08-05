@@ -166,6 +166,13 @@ services:
       # same fix.
       HF_HUB_DISABLE_XET: '1'
       HF_HUB_OFFLINE: '1'
+      # Forces SDXL onto the sequential-CPU-offload path (see server.py) even
+      # though this card has plenty of VRAM in isolation - vllm's Qwen3-32B-AWQ
+      # already claims most of it, so SDXL needs to run in its low-VRAM mode
+      # to coexist rather than always-resident at ~10GB. Trades image-gen
+      # latency for footprint (sequential offload moves individual layers to
+      # the GPU one at a time instead of keeping the whole pipeline resident).
+      IMAGE_LOW_VRAM: '1'
     volumes:
       # Same rationale as tts_cache above - persists the SDXL download,
       # which only actually happens on the FIRST real image-generation

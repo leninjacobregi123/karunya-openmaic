@@ -85,7 +85,14 @@ def get_pipe():
                 # bf16 avoids the SDXL fp16-VAE NaN/black-image bug on Blackwell, but this
                 # host is a 4GB Turing card (no bf16 tensor cores, and no headroom to keep
                 # the full ~7GB pipeline resident) -> fp16 + CPU offload instead.
-                low_vram = device == "cuda" and torch.cuda.get_device_properties(0).total_memory < 8 * 1024**3
+                #
+                # IMAGE_LOW_VRAM forces this same path on ANY card, regardless of total
+                # memory - needed when SDXL shares the GPU with a large LLM (e.g. vLLM
+                # serving Qwen3-32B-AWQ) and the LLM's weights alone already claim most of
+                # a 32GB card, leaving no room for SDXL's normal ~10GB fully-resident load.
+                low_vram = os.environ.get("IMAGE_LOW_VRAM", "") == "1" or (
+                    device == "cuda" and torch.cuda.get_device_properties(0).total_memory < 8 * 1024**3
+                )
                 dtype = torch.float16 if (device == "cuda" and low_vram) else (
                     torch.bfloat16 if device == "cuda" else torch.float32
                 )
