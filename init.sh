@@ -1,12 +1,12 @@
 #!/bin/bash
-# Harness startup + verification for OpenMAIC.
+# Fast local verification loop for OpenMAIC.
 # The code lives in OpenMAIC/; this script runs every gate from there.
 set -e
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP="$ROOT/OpenMAIC"
 
-echo "=== Harness Initialization ==="
+echo "=== Verification ==="
 echo "Workspace root: $ROOT"
 echo "App dir:        $APP"
 cd "$APP"
@@ -38,12 +38,6 @@ pnpm test
 echo ""
 echo "=== Verification Complete ==="
 echo ""
-echo "Heavier gates (run when your change touches them — NOT part of fast loop):"
+echo "Heavier gates (run when your change touches them — not part of this fast loop):"
 echo "  - cd OpenMAIC && pnpm build        # production build (asserts vendored maic-importer)"
 echo "  - cd OpenMAIC && pnpm test:e2e     # playwright e2e on :3002"
-echo ""
-echo "Next steps:"
-echo "1. Read feature_list.json to see current feature state"
-echo "2. Pick ONE feature whose status is not 'done' and whose dependencies are 'done'"
-echo "3. Implement only that feature"
-echo "4. Re-run ./init.sh before claiming done; record evidence in feature_list.json + progress.md"

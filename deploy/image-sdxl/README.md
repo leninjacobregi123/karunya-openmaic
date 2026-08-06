@@ -18,8 +18,8 @@ This host-process path is a standalone alternative for iterating on the server
 outside Docker. The actual deployed path containerizes this same `server.py` via
 the sibling `Dockerfile` and runs it as the `image` service in
 `docker-compose.remote.yml` (gated behind the `media` Compose profile, with
-`IMAGE_LOW_VRAM=1` set to let it coexist with a large resident LLM — see
-`CLAUDE.md`'s Karunya customization section for the current bring-up flow).
+`IMAGE_LOW_VRAM=1` set to let it coexist with a large resident LLM — see the
+root `README.md`'s deployment section for the current bring-up flow).
 Because `lemonade` is keyless and we do **not** set `IMAGE_OPENAI_API_KEY`, it
 becomes the server-managed default image provider for classroom generation.
 

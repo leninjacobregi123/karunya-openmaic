@@ -15,5 +15,5 @@ out/
 *.swp
 *.swo
 
-# Claude
-.claude/settings.local.json
+# Claude Code local session state
+.claude/

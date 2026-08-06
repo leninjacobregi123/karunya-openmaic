@@ -1,20 +1,30 @@
 # OpenMAIC for Karunya University — Architecture & Design
 
-**Status:** v2 (as-built in dev) · **Updated:** 2026-06-21 · **Owner:** admin@karunya.edu
+**Status:** v3 (as-deployed) · **Updated:** 2026-08-06 · **Owner:** admin@karunya.edu
 
-This document specifies how we turn upstream **OpenMAIC** (a single-user, browser-local classroom tool) into a **multi-user learning platform** for Karunya University, running on a local Kubernetes cluster with local LLMs.
+This document specifies how we turn upstream **OpenMAIC** (a single-user, browser-local classroom tool) into a **multi-user learning platform** for Karunya University, with local LLMs.
 
-> Companion files: harness plan in `feature_list.json` (phases feat-010..feat-060), session log in `progress.md`, codebase map in `CLAUDE.md` (see its "Karunya customization" section for the file map + dev run steps).
+**Current reality vs. original target:** the design below (§1, §4, §8, §10) was originally
+scoped for an on-prem Kubernetes cluster with multiple 40–80GB datacenter GPUs. What's
+actually built and running today is a single-GPU Docker Compose deployment (see the root
+[`README.md`](../README.md) for the exact command and configuration) — everything in the
+app/platform layer (auth, courses, persistence, teacher dashboard) is unchanged from that
+target, but model serving is scaled down to fit one consumer GPU. The Kubernetes manifests
+in `deploy/k8s/` implement the original cluster target and are ready to use once real
+cluster infrastructure (see §13) is available; they are not what's currently deployed.
 
 ---
 
 ## 0. Implementation status (as-built)
 
-Phases 0–5 are **implemented and validated in dev** on a single GB10 box (Docker dev stack + local models). Only real-cluster deployment and the production AD/LDAP binding remain (both gated on external inputs = `feat-005` + AD details).
+Phases 0–5 are **implemented and validated in dev**, currently running as a single-box
+Docker Compose deployment (`docker-compose.remote.yml` at the repo root) with fully
+containerized local models. Real-cluster deployment and the production AD/LDAP binding
+remain (both gated on external inputs — cluster specifics + AD details, see §13).
 
 | Phase | Status | Notes / deviations from the original plan |
 |---|---|---|
-| 0 Infra & local models | ✅ dev | LLM = host **Ollama** (not vLLM yet); TTS = **VoxCPM2**, images = **SDXL** — all on the GB10. Postgres/Redis/MinIO as dev containers. |
+| 0 Infra & local models | ✅ deployed | LLM = containerized **vLLM** serving `Qwen/Qwen3-32B-AWQ` (int4 AWQ, ~18GB weights) on a single 32GB GPU — see the root `README.md`'s "Local LLM Configuration" section for the full setup and tuning. TTS = **VoxCPM2**, images = **SDXL** (low-VRAM sequential-offload mode to coexist with the LLM on one card). All three run as Docker Compose services alongside Postgres/Redis/MinIO. |
 | 1 Identity & RBAC | ✅ | **Custom HMAC session tokens** (edge-safe) + pluggable `AuthProvider`, not Auth.js. `DevAccountsProvider` live; `LdapProvider` pending AD details. |
 | 2 Persistence & publish | ✅ | Drizzle/Postgres source of truth; publish-immutable; cohorts/roster/assign; student "My Courses". |
 | 3 Progress / grading / transcripts | ✅ | Server persistence + teacher reports; client telemetry wired (progress, quiz, chat). |
@@ -39,7 +49,11 @@ Phases 0–5 are **implemented and validated in dev** on a single GB10 box (Dock
 - **Teacher** — creates, generates, and **publishes** courses; assigns them to student cohorts; tracks student progress. (Beta: the project owner is the sole teacher.)
 - **Admin** — manages users, roles, providers, and system config.
 
-**Infra:** on-prem K8s cluster; **local LLMs only** (no external AI providers). Strong GPUs available (multiple 40–80GB, A100/H100/L40S class).
+**Infra:** **local LLMs only** (no external AI providers), currently a single-box Docker
+Compose deployment on one 32GB consumer GPU (see §0). Original target below (§4, §10)
+assumed an on-prem K8s cluster with multiple 40–80GB datacenter GPUs (A100/H100/L40S
+class) — that remains the scale-up path once cluster infrastructure is available, and the
+app/platform layer is already built to run unmodified on either.
 
 **Auth:** Active Directory via LDAP; role from AD group membership; student rosters imported by CSV.
 
@@ -186,11 +200,11 @@ Notes: course content stays in the existing `@maic/dsl` shape inside `course_ver
 
 ## 8. Local Model Serving
 
-| Capability | Model (recommended) | Server | Notes |
+| Capability | Model (as deployed today) | Server | Notes |
 |---|---|---|---|
-| Text: outline, scene, **teacher chat**, **quiz grading** | Qwen2.5-72B-Instruct or Llama-3.3-70B-Instruct | **vLLM** (OpenAI-compatible) | One quality pool; optional fast 7–32B pool for chat latency. |
-| TTS narration | **VoxCPM2** (OpenBMB) | GPU pod, `/v1/audio/speech` | First-class OpenMAIC adapter; run at publish time. |
-| Slide images | **SDXL** or **Flux** | ComfyUI/vLLM-image or OpenAI-compatible shim | Run at publish time; store in MinIO. |
+| Text: outline, scene, **teacher chat**, **quiz grading** | **Qwen/Qwen3-32B-AWQ** (int4 AWQ, ~18GB weights) | **vLLM** (OpenAI-compatible), containerized | Sized to fit one 32GB GPU alongside TTS+image; see root `README.md`'s "Local LLM Configuration" for exact tuning and how to size up. On a datacenter-GPU cluster (§1 scale-up path), swap in a larger dense/quality model (e.g. Qwen2.5-72B-Instruct or Llama-3.3-70B-Instruct) — no app code change needed, purely a `MAIC_VLLM_MODEL` + resource change. |
+| TTS narration | **VoxCPM2** (OpenBMB) | Containerized, `/v1/audio/speech` | First-class OpenMAIC adapter; run at publish time. |
+| Slide images | **SDXL** (Stable Diffusion XL) | Containerized, OpenAI-compatible shim | Run at publish time; store in MinIO. Low-VRAM sequential-offload mode (`IMAGE_LOW_VRAM=1`) trades latency for footprint to coexist with the LLM on one card. |
 
 Wired via OpenMAIC's existing provider abstraction (`lib/ai/`, `server-providers.yml`, `*_BASE_URL`/`DEFAULT_MODEL`). All providers marked **server-configured** so the client never sees keys or provider settings. `ALLOW_LOCAL_NETWORKS=true` for in-cluster URLs.
 
@@ -227,16 +241,16 @@ Wired via OpenMAIC's existing provider abstraction (`lib/ai/`, `server-providers
 
 ---
 
-## 12. Phased Plan (maps to `feature_list.json`)
+## 12. Phased Plan
 
-| Phase | feat id | Deliverable |
+| Phase | Deliverable | Status |
 |---|---|---|
-| 0 — Infra & local models | feat-010 | vLLM + VoxCPM + image model up; Postgres/Redis/MinIO; OpenMAIC containerized for K8s; generation works end-to-end on local LLMs. |
-| 1 — Identity & RBAC | feat-020 | AD/LDAP login, roles, session middleware; creation/settings/editor locked down for students (UI + API 403s). |
-| 2 — Persistence & publish | feat-030 | Postgres/MinIO course store + Redis job queue; publish-immutable flow; "My Courses"; CSV roster + cohort assignment. |
-| 3 — Progress & grading | feat-040 | Server-side progress sync from playback engine; quiz result persistence; chat transcript persistence. |
-| 4 — Teacher dashboard | feat-050 | Enrollment/roster management + analytics (completion, quiz scores, time-on-task, transcript review). |
-| 5 — Scale hardening | feat-060 | Multi-replica, HPA, load test to 500 concurrent; pre-gen TTS/image optimization; backups/runbooks. |
+| 0 — Infra & local models | vLLM + VoxCPM + image model up; Postgres/Redis/MinIO; OpenMAIC containerized (Docker Compose today, `deploy/k8s/` ready for a cluster migration); generation works end-to-end on local LLMs. | ✅ deployed |
+| 1 — Identity & RBAC | AD/LDAP login, roles, session middleware; creation/settings/editor locked down for students (UI + API 403s). | ✅ dev accounts; LDAP pending AD details |
+| 2 — Persistence & publish | Postgres/MinIO course store + Redis job queue; publish-immutable flow; "My Courses"; CSV roster + cohort assignment. | ✅ |
+| 3 — Progress & grading | Server-side progress sync from playback engine; quiz result persistence; chat transcript persistence. | ✅ |
+| 4 — Teacher dashboard | Enrollment/roster management + analytics (completion, quiz scores, time-on-task, transcript review). | ✅ |
+| 5 — Scale hardening | Multi-replica, HPA, load test to 500 concurrent; pre-gen TTS/image optimization; backups/runbooks. | ✅ code; cluster deploy = ops (§13) |
 
 ---
 
