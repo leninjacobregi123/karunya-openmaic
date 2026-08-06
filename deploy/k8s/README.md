@@ -53,7 +53,7 @@ Auth (signed-cookie sessions) and the chat SSE path were already stateless.
 *queue* (currently job execution runs in the web replica that received the request, via
 `after()`, and writes shared state to Redis — correct for the single-teacher beta).
 
-## Sizing (from dev load test — see docs/karunya-architecture.md / progress.md)
+## Sizing (from dev load test — see docs/karunya-architecture.md)
 
 - Playback is static-serving + a cheap enrollment check (no LLM). A single **dev** replica
   sustained ~130 req/s with **0 errors** to 500 concurrent; a production build + several

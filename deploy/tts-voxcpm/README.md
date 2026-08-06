@@ -17,8 +17,8 @@ curl localhost:8000/health
 This host-process path is a standalone alternative for iterating on the server
 outside Docker. The actual deployed path containerizes this same `server.py` via
 the sibling `Dockerfile` and runs it as the `tts` service in
-`docker-compose.remote.yml` (gated behind the `media` Compose profile - see
-`CLAUDE.md`'s Karunya customization section for the current bring-up flow).
+`docker-compose.remote.yml` (gated behind the `media` Compose profile - see the
+root `README.md`'s deployment section for the current bring-up flow).
 
 ## How it was set up (reproduce)
 
