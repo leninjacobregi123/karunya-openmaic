@@ -23,15 +23,26 @@
 #      `--profile local-vllm` on the `up` command, and set
 #      MAIC_VLLM_BASE_URL=http://vllm:8000/v1 in .env to point the app at it.
 #
-# Quick start on a fresh remote GPU box (external vLLM):
+# Quick start on a fresh remote GPU box (containerized vLLM, the default):
 #   git clone <this repo> && cd maic
-#   cp .env.remote.example .env               # then EDIT the passwords/secret
 #   docker compose -f docker-compose.remote.yml up -d --build
-#   docker compose -f docker-compose.remote.yml logs -f app
+#   docker compose -f docker-compose.remote.yml logs -f vllm   # first boot primes
+#                                                               # the ~18GB model cache
 #   open http://<remote-host>:3000
 #
-# Quick start with the containerized vLLM instead (setup 2 above):
-#   docker compose -f docker-compose.remote.yml --profile local-vllm up -d --build
+# That's the whole deploy - ONE command. The committed root `.env` ships
+# fixed dev-grade secrets and MAIC_VLLM_MODEL/COMPOSE_PROFILES already set,
+# and model weights are pulled automatically by the `*-prime` init
+# containers below (they run once, before their GPU service starts, and are
+# a no-op on every later `up` once a cache is populated) - nothing to copy
+# or run by hand first. Before exposing this to anyone but you, replace the
+# secrets in `.env` with your own (it's committed for zero-setup convenience
+# on a single-admin box, not meant to survive contact with the internet).
+#
+# Using vLLM running elsewhere instead (setup 1: directly on this host, or a
+# different machine) - unset COMPOSE_PROFILES in .env (or override it:
+# `COMPOSE_PROFILES= docker compose -f docker-compose.remote.yml up -d --build`)
+# and set MAIC_VLLM_MODEL / MAIC_VLLM_BASE_URL to point at it instead.
 #
 # Prerequisites on the remote host (the one thing this file can't provide):
 #   - NVIDIA driver installed
@@ -124,12 +135,57 @@ services:
   # `docker stop` (not `down`/`rm`) so restarting is a fast warm start against
   # the same cache volumes, not a rebuild.
   # ---------------------------------------------------------------------------
+  # One-shot: populate tts_cache from the pre-packaged GitHub Release before
+  # `tts` starts, if it isn't already populated. Runs in a throwaway alpine
+  # container (not the tts image itself) so it starts instantly rather than
+  # waiting on tts's own multi-minute torch/CUDA build. Idempotent: skips the
+  # download entirely once CACHE_MARKER exists, so this is a fast no-op on
+  # every `up` after the first.
+  tts-prime:
+    image: alpine:3.20
+    profiles: ['media']
+    restart: 'no'
+    networks: [maic-net]
+    volumes:
+      - tts_cache:/root/.cache/huggingface
+    environment:
+      MODEL_REPO: leninjacobregi123/karunya-openmaic
+      MODEL_TAG: voxcpm2-model
+      MODEL_ARCHIVE: voxcpm2.tar.gz
+      CACHE_MARKER: /root/.cache/huggingface/hub/models--openbmb--VoxCPM2/snapshots
+    entrypoint: ['sh', '-c']
+    command:
+      - |
+        set -e
+        if ls "$$CACHE_MARKER"/* >/dev/null 2>&1; then
+          echo "==> tts cache already primed, skipping"; exit 0
+        fi
+        apk add --no-cache curl >/dev/null
+        mkdir -p /tmp/dl && cd /tmp/dl
+        API_URL="https://api.github.com/repos/$$MODEL_REPO/releases/tags/$$MODEL_TAG"
+        echo "==> fetching release manifest: $$API_URL"
+        curl -fsSL "$$API_URL" | grep -oE '"browser_download_url": *"[^"]*"' | sed 's/.*"\(https[^"]*\)"/\1/' > urls.txt
+        [ -s urls.txt ] || { echo "no assets found for $$MODEL_TAG" >&2; exit 1; }
+        while read -r url; do
+          echo "    downloading $$(basename "$$url")"
+          curl -fSL -C - --retry 5 --retry-delay 5 --retry-all-errors "$$url" -o "$$(basename "$$url")"
+        done < urls.txt
+        cat "$$MODEL_ARCHIVE".part-* > "$$MODEL_ARCHIVE"
+        rm -f "$$MODEL_ARCHIVE".part-* urls.txt
+        mkdir -p /root/.cache/huggingface
+        tar xzf "$$MODEL_ARCHIVE" -C /root/.cache/huggingface
+        rm -f "$$MODEL_ARCHIVE"
+        echo "==> tts cache primed"
+
   tts:
     build:
       context: ./deploy/tts-voxcpm
     profiles: ['media']
     restart: unless-stopped
     networks: [maic-net]
+    depends_on:
+      tts-prime:
+        condition: service_completed_successfully
     environment:
       # Same Xet-CDN-blocked-by-network issue as the vllm service below: even
       # with a fully-primed cache, huggingface_hub still tries to verify/
@@ -156,12 +212,52 @@ services:
               count: all
               capabilities: [gpu]
 
+  # Same idea as tts-prime above, for image_cache / the sdxl release.
+  image-prime:
+    image: alpine:3.20
+    profiles: ['media']
+    restart: 'no'
+    networks: [maic-net]
+    volumes:
+      - image_cache:/root/.cache/huggingface
+    environment:
+      MODEL_REPO: leninjacobregi123/karunya-openmaic
+      MODEL_TAG: sdxl-model
+      MODEL_ARCHIVE: sdxl.tar.gz
+      CACHE_MARKER: /root/.cache/huggingface/hub/models--stabilityai--stable-diffusion-xl-base-1.0/snapshots
+    entrypoint: ['sh', '-c']
+    command:
+      - |
+        set -e
+        if ls "$$CACHE_MARKER"/* >/dev/null 2>&1; then
+          echo "==> image cache already primed, skipping"; exit 0
+        fi
+        apk add --no-cache curl >/dev/null
+        mkdir -p /tmp/dl && cd /tmp/dl
+        API_URL="https://api.github.com/repos/$$MODEL_REPO/releases/tags/$$MODEL_TAG"
+        echo "==> fetching release manifest: $$API_URL"
+        curl -fsSL "$$API_URL" | grep -oE '"browser_download_url": *"[^"]*"' | sed 's/.*"\(https[^"]*\)"/\1/' > urls.txt
+        [ -s urls.txt ] || { echo "no assets found for $$MODEL_TAG" >&2; exit 1; }
+        while read -r url; do
+          echo "    downloading $$(basename "$$url")"
+          curl -fSL -C - --retry 5 --retry-delay 5 --retry-all-errors "$$url" -o "$$(basename "$$url")"
+        done < urls.txt
+        cat "$$MODEL_ARCHIVE".part-* > "$$MODEL_ARCHIVE"
+        rm -f "$$MODEL_ARCHIVE".part-* urls.txt
+        mkdir -p /root/.cache/huggingface
+        tar xzf "$$MODEL_ARCHIVE" -C /root/.cache/huggingface
+        rm -f "$$MODEL_ARCHIVE"
+        echo "==> image cache primed"
+
   image:
     build:
       context: ./deploy/image-sdxl
     profiles: ['media']
     restart: unless-stopped
     networks: [maic-net]
+    depends_on:
+      image-prime:
+        condition: service_completed_successfully
     environment:
       # See the tts service's identical comment above - same Xet CDN issue,
       # same fix.
@@ -208,7 +304,62 @@ services:
   # always-on; they trade off against vLLM's footprint instead of sharing
   # a slice of it.
   # ---------------------------------------------------------------------------
+  # Same idea as tts-prime/image-prime above, for vllm_cache / the
+  # Qwen3-32B-AWQ release - except this release's layout is a flat directory
+  # of individual model files (some split into <2GB parts), not a tar of an
+  # HF cache tree, since vllm's --model flag below points at a plain local
+  # path rather than a real HF cache (see the `vllm` service's own comment
+  # for why: this network's proxy breaks the Hub API path outright).
+  vllm-prime:
+    image: alpine:3.20
+    profiles: ['local-vllm']
+    restart: 'no'
+    networks: [maic-net]
+    volumes:
+      - vllm_cache:/root/.cache/huggingface
+    environment:
+      MODEL_REPO: leninjacobregi123/karunya-openmaic
+      MODEL_TAG: qwen3-32b-awq-model
+      TARGET_DIR: /root/.cache/huggingface/local-models/Qwen3-32B-AWQ
+      CACHE_MARKER: /root/.cache/huggingface/local-models/Qwen3-32B-AWQ/model.safetensors.index.json
+    entrypoint: ['sh', '-c']
+    command:
+      - |
+        set -e
+        if [ -f "$$CACHE_MARKER" ]; then
+          echo "==> vllm cache already primed, skipping"; exit 0
+        fi
+        apk add --no-cache curl >/dev/null
+        mkdir -p /tmp/dl "$$TARGET_DIR" && cd /tmp/dl
+        API_URL="https://api.github.com/repos/$$MODEL_REPO/releases/tags/$$MODEL_TAG"
+        echo "==> fetching release manifest: $$API_URL"
+        curl -fsSL "$$API_URL" | grep -oE '"browser_download_url": *"[^"]*"' | sed 's/.*"\(https[^"]*\)"/\1/' > urls.txt
+        [ -s urls.txt ] || { echo "no assets found for $$MODEL_TAG" >&2; exit 1; }
+        while read -r url; do
+          echo "    downloading $$(basename "$$url")"
+          curl -fSL -C - --retry 5 --retry-delay 5 --retry-all-errors "$$url" -o "$$(basename "$$url")"
+        done < urls.txt
+        rm -f urls.txt
+        echo "==> reassembling split files into $$TARGET_DIR"
+        for f in *; do
+          case "$$f" in
+            *.part-*)
+              base="$${f%.part-*}"
+              if [ ! -f "$$TARGET_DIR/$$base" ]; then
+                cat "$$base".part-* > "$$TARGET_DIR/$$base"
+                rm -f "$$base".part-*
+              fi
+              ;;
+            *) mv "$$f" "$$TARGET_DIR/$$f" ;;
+          esac
+        done
+        cd / && rm -rf /tmp/dl
+        echo "==> vllm cache primed"
+
   vllm:
+    depends_on:
+      vllm-prime:
+        condition: service_completed_successfully
     # Pinned, NOT :latest. vLLM's :latest tag has moved to a CUDA>=13.0 base
     # (NVIDIA_REQUIRE_CUDA=cuda>=13.0) - it'll fail outright
     # ("nvidia-container-cli: requirement error: unsatisfied condition:
@@ -233,8 +384,8 @@ services:
     # with HF_HUB_DISABLE_XET set. A literal path bypasses the Hub client
     # entirely (pure local load, no network/variant/completeness resolution
     # at all) - same trick as _resolve_local() in deploy/image-sdxl/server.py.
-    # Primed via `./prime-model-cache.sh qwen3-32b` into vllm_cache below -
-    # see that script for how the directory gets populated.
+    # Primed automatically into vllm_cache below by the vllm-prime init
+    # container above before this service starts.
     #
     # gpu-memory-utilization is a fraction of *total* device memory reserved
     # for vLLM's entire footprint (weights + KV cache), not a fraction of
