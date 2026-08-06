@@ -173,3 +173,34 @@ carried out on shannon (the one machine this app runs on — never locally).
 **Next:** finish validating image-gen under real load alongside vllm+tts (retune
 `gpu-memory-utilization`/`max-model-len` again if needed, same empirical loop as
 every step above), then this feature's exit criterion is fully met.
+
+## Session Update — 2026-08-06: single-command deploy (`docker compose up`)
+
+Replaced the two-script bring-up (`bootstrap-remote.sh` clone/`.env`-gen/build/prime,
+then `prime-model-cache.sh` per-model) with a fully self-contained
+`docker-compose.remote.yml`: `docker compose -f docker-compose.remote.yml up -d --build`
+is now the entire deploy, no prior step.
+
+- **Model priming moved into Compose itself:** three new one-shot init services
+  (`vllm-prime`, `tts-prime`, `image-prime`, alpine-based, fast to start since they
+  don't wait on the GPU-image builds) run the same idempotent download/reassemble/
+  extract logic `prime-model-cache.sh` used to run by hand, gated behind the same
+  profiles as their target service and wired in via
+  `depends_on: condition: service_completed_successfully` on `vllm`/`tts`/`image`.
+  Confirmed no-op on an already-primed cache; confirmed `docker compose config`
+  resolves the dependency graph correctly (validated locally — config render only,
+  never brings up containers, consistent with the shannon-only run rule).
+- **Committed a root `.env`** with fixed dev-grade secrets and
+  `COMPOSE_PROFILES=local-vllm` pre-set (auto-activates the containerized vLLM on a
+  plain `up`, no `--profile` flag needed) and `MAIC_VLLM_MODEL`/`MAIC_VLLM_BASE_URL`
+  already pointed at it. Explicit tradeoff (user-confirmed): zero-setup convenience
+  over out-of-the-box secret rotation, appropriate for a single-admin lab box —
+  `.env.remote.example` still documents every value for anyone who wants to run
+  their own secrets instead.
+- **Deleted `bootstrap-remote.sh` and `prime-model-cache.sh`** — both fully
+  superseded, no remaining callers.
+- Updated `README.md`/`CLAUDE.md` deploy instructions accordingly.
+
+**Not yet done:** this hasn't been run on shannon yet — the compose file only got a
+local `docker compose config` validation (structure/interpolation), not a real
+`up` against shannon's GPU. First real run there is the actual verification.

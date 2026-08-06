@@ -79,8 +79,17 @@ machine — only static checks that don't run the app (`./init.sh`, `pnpm build`
 here. On shannon:
 
 ```bash
-./bootstrap-remote.sh   # clone/pull, .env, build images, prime model caches, bring up
+git clone <repo> && cd karunya-openmaic   # or: git pull, if already cloned
+docker compose -f docker-compose.remote.yml up -d --build
 ```
+
+One command — no separate `.env`-generation or model-priming step. The committed
+root `.env` ships dev-grade secrets and `COMPOSE_PROFILES=local-vllm` already set, and
+model weights are pulled automatically (from pre-packaged GitHub Releases) by
+`vllm-prime`/`tts-prime`/`image-prime` one-shot init containers before their GPU
+service starts — idempotent, so re-running `up` after a `git pull` never re-downloads
+anything already cached. Replace the secrets in `.env` before this host is reachable
+by anyone but you.
 
 This brings up `postgres redis minio minio-init migrate app` plus `vllm` (containerized
 LLM, profile `local-vllm`) by default. `image`/`tts` are profile-gated (`media`) since
